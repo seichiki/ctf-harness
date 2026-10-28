@@ -4,3 +4,4 @@ model = "SET_YOUR_AVAILABLE_MODEL_ID"
 effort = "medium"
 daybreak = "off"
 orchestration = "single"
+network_access = "off" # sandbox outbound network request; set "on" only for an authorized live target

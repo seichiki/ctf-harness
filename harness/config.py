@@ -13,16 +13,19 @@ MODEL_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}\Z")
 EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra")
 DAYBREAK = ("off", "blue")
 ORCHESTRATION = ("single", "multi", "interactive")
-DEFAULTS = {"model": "", "effort": "medium", "daybreak": "off", "orchestration": "single"}
+NETWORK_ACCESS = ("off", "on")
+DEFAULTS = {"model": "", "effort": "medium", "daybreak": "off", "orchestration": "single",
+            "network_access": "off"}
 
 
 def validate(config: dict) -> dict[str, str]:
     if set(config) != set(DEFAULTS):
-        raise ValueError("config must contain only model, effort, daybreak, and orchestration")
+        raise ValueError("config must contain only model, effort, daybreak, orchestration, and network_access")
     model = config["model"]
     if not isinstance(model, str) or not MODEL_ID.fullmatch(model) or model == "SET_YOUR_AVAILABLE_MODEL_ID":
         raise ValueError("set a real model ID available to your own Codex account")
-    for key, choices in (("effort", EFFORTS), ("daybreak", DAYBREAK), ("orchestration", ORCHESTRATION)):
+    for key, choices in (("effort", EFFORTS), ("daybreak", DAYBREAK), ("orchestration", ORCHESTRATION),
+                         ("network_access", NETWORK_ACCESS)):
         if not isinstance(config[key], str) or config[key] not in choices:
             raise ValueError(f"{key} must be one of: {', '.join(choices)}")
     return dict(config)

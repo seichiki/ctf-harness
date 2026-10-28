@@ -1,14 +1,16 @@
 """Offline checks for a standalone clone; no Codex model request is made."""
 
 import json
+import io
 import os
 import subprocess
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
-from harness import config, report, runner
+from harness import cli, config, report, runner
 
 
 class ConfigTests(unittest.TestCase):
@@ -16,20 +18,27 @@ class ConfigTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / "config.toml"
             values = config.load({"model": "gpt-6-luna"}, path)
-            self.assertEqual((values["effort"], values["daybreak"], values["orchestration"]),
-                             ("medium", "off", "single"))
+            self.assertEqual((values["effort"], values["daybreak"], values["orchestration"],
+                              values["network_access"]), ("medium", "off", "single", "off"))
             config.save({"model": "gpt-5.6-sol", "effort": "high", "daybreak": "blue",
-                         "orchestration": "multi"}, path)
+                         "orchestration": "multi", "network_access": "on"}, path)
             self.assertEqual(config.load(path=path)["daybreak"], "blue")
+            self.assertEqual(config.load(path=path)["network_access"], "on")
             self.assertEqual(config.load({"daybreak": "off"}, path)["daybreak"], "off")
+            self.assertEqual(config.load({"network_access": "off"}, path)["network_access"], "off")
             with self.assertRaises(FileExistsError):
                 config.save(values, path)
 
+            path.write_text('model = "gpt-5.6-sol"\neffort = "high"\ndaybreak = "blue"\norchestration = "multi"\n',
+                            encoding="utf-8")
+            self.assertEqual(config.load(path=path)["network_access"], "off")
+
     def test_invalid_configuration_stops(self):
         for key, value in (("model", ""), ("model", "other/provider"), ("effort", "invalid"),
-                           ("daybreak", "red"), ("orchestration", "auto")):
+                           ("daybreak", "red"), ("orchestration", "auto"),
+                           ("network_access", "sometimes"), ("network_access", True)):
             data = {"model": "gpt-6-luna", "effort": "medium", "daybreak": "off",
-                    "orchestration": "single"}
+                    "orchestration": "single", "network_access": "off"}
             data[key] = value
             with self.assertRaises(ValueError):
                 config.validate(data)
@@ -47,7 +56,7 @@ class CommandTests(unittest.TestCase):
         self.workdir = Path("/tmp/ctf-harness-test-role")
         self.schema = self.workdir / "schema.json"
         self.base = {"model": "gpt-6-luna", "effort": "medium", "daybreak": "off",
-                     "orchestration": "single"}
+                     "orchestration": "single", "network_access": "off"}
 
     def test_off_is_explicit_and_single_is_default(self):
         command = runner.build_exec_command(self.base, self.workdir, self.schema, "disabled", "fixture prompt", "codex")
@@ -57,6 +66,8 @@ class CommandTests(unittest.TestCase):
         self.assertIn("model_reasoning_effort=medium", command)
         self.assertIn("features.multi_agent=false", command)
         self.assertIn("web_search=disabled", command)
+        self.assertIn("sandbox_workspace_write.network_access=false", command)
+        self.assertIn("approval_policy=on-request", command)
         self.assertEqual(command[command.index("-m") + 1], "gpt-6-luna")
         self.assertNotIn("daybreak_blue", command)
         self.assertEqual(runner.choose_switches("test", "auto", "auto"), {
@@ -65,22 +76,34 @@ class CommandTests(unittest.TestCase):
 
     def test_blue_multi_is_explicit_for_each_exec(self):
         selected = {"model": "gpt-5.6-sol", "effort": "high", "daybreak": "blue",
-                    "orchestration": "multi"}
+                    "orchestration": "multi", "network_access": "on"}
         command = runner.build_exec_command(selected, self.workdir, self.schema, "live", "fixture", "codex")
         self.assertEqual(command[command.index("--cyber-access-program") + 1], "daybreak_blue")
         self.assertIn("daybreak=true", command)
         self.assertIn("model_reasoning_effort=high", command)
         self.assertIn("web_search=live", command)
+        self.assertIn("sandbox_workspace_write.network_access=true", command)
         self.assertEqual(runner.choose_switches("production", "auto", "auto")["similar_search"], True)
+
+    def test_network_and_search_are_independent(self):
+        for network_access, web_mode in (("off", "disabled"), ("off", "live"),
+                                         ("on", "disabled"), ("on", "live")):
+            command = runner.build_exec_command({**self.base, "network_access": network_access},
+                                                self.workdir, self.schema, web_mode, "fixture", "codex")
+            self.assertIn(f"sandbox_workspace_write.network_access={'true' if network_access == 'on' else 'false'}", command)
+            self.assertIn(f"web_search={web_mode}", command)
 
     def test_tui_has_no_prompt_or_guessed_blue_model(self):
         off = runner.build_tui_command(self.base, self.workdir, "disabled", "codex")
         self.assertIn("daybreak=false", off)
         self.assertIn("model_provider=openai", off)
+        self.assertIn("sandbox_workspace_write.network_access=false", off)
         self.assertNotIn("--cyber-access-program", off)
         self.assertEqual(off[off.index("-m") + 1], "gpt-6-luna")
-        blue = runner.build_tui_command({**self.base, "daybreak": "blue"}, self.workdir, "live", "codex")
+        blue = runner.build_tui_command({**self.base, "daybreak": "blue", "network_access": "on"},
+                                        self.workdir, "live", "codex")
         self.assertIn("daybreak=true", blue)
+        self.assertIn("sandbox_workspace_write.network_access=true", blue)
         self.assertNotIn("daybreak_blue", blue)
         self.assertEqual(blue[-1], "workspace-write")
 
@@ -135,7 +158,7 @@ class RunnerExecutionTests(unittest.TestCase):
         (case / "input" / "statement.txt").write_text("A local test fixture.", encoding="utf-8")
         runner.seal_case("misc", "fixture")
         self.config = {"model": "gpt-5.6-sol", "effort": "high", "daybreak": "blue",
-                       "orchestration": "multi"}
+                       "orchestration": "multi", "network_access": "off"}
         self.switches = runner.choose_switches("test", "auto", "auto")
 
     def run_mocked(self, scenarios=None, candidates=None):
@@ -190,6 +213,7 @@ class RunnerExecutionTests(unittest.TestCase):
             self.assertEqual(command[command.index("-C") + 1], str(cwd))
             self.assertEqual(command[command.index("-m") + 1], "gpt-5.6-sol")
             self.assertEqual(command[command.index("--cyber-access-program") + 1], "daybreak_blue")
+            self.assertIn(f"sandbox_workspace_write.network_access={'true' if self.config['network_access'] == 'on' else 'false'}", command)
             self.assertTrue((path / role / "run.json").is_file())
         return path, summary, [role for role, _, _ in calls]
 
@@ -200,6 +224,36 @@ class RunnerExecutionTests(unittest.TestCase):
         self.assertEqual((path / "candidate.txt").read_text(encoding="utf-8"), "fixture-answer\n")
         packet = json.loads((path / "verifier_review" / "frozen-reports.json").read_text(encoding="utf-8"))
         self.assertEqual(set(packet), {"verifier", "solver_a", "solver_b"})
+        self.assertFalse(summary["network_access_requested"])
+        self.assertEqual(summary["network_access_effective"], "unverified")
+
+    def test_network_on_reaches_all_multi_roles_without_search(self):
+        self.config["network_access"] = "on"
+        path, summary, roles = self.run_mocked()
+        self.assertEqual(set(roles), {"verifier", "solver_a", "solver_b", "verifier_review"})
+        settings = json.loads((path / "settings.json").read_text(encoding="utf-8"))
+        self.assertTrue(settings["network_access_requested"])
+        self.assertFalse(settings["similar_search"])
+        self.assertEqual(settings["network_access_effective"], "unverified")
+        self.assertTrue(summary["network_access_requested"])
+        self.assertFalse(summary["network_host_restriction"])
+        for role in roles:
+            invocation = json.loads((path / role / "invocation.json").read_text(encoding="utf-8"))
+            self.assertIn("sandbox_workspace_write.network_access=true", invocation["argv_without_prompt"])
+            self.assertIn("web_search=disabled", invocation["argv_without_prompt"])
+
+    def test_dry_run_reports_network_override_without_model_call(self):
+        self.config["network_access"] = "on"
+        output = io.StringIO()
+        with patch.object(cli, "load", return_value=self.config) as loaded, redirect_stdout(output):
+            self.assertEqual(cli.main(["run", "--category", "misc", "--case-id", "fixture",
+                                       "--preset", "test", "--network-access", "on", "--dry-run"]), 0)
+        self.assertEqual(loaded.call_args.args[0]["network_access"], "on")
+        plan = json.loads(output.getvalue())
+        self.assertTrue(plan["network_access_requested"])
+        self.assertFalse(plan["similar_search"])
+        self.assertFalse(plan["answer_reference"])
+        self.assertEqual(plan["network_access_effective"], "unverified")
 
     def test_verifier_failure_persists_partial_result(self):
         path, summary, roles = self.run_mocked({"verifier": "failure"})

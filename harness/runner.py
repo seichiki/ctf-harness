@@ -158,6 +158,7 @@ def build_exec_command(config: dict, workdir: Path, schema: Path, web_mode: str,
             "-m", config["model"], "-c", f"model_reasoning_effort={config['effort']}",
             "-c", "approval_policy=on-request", "-c", "features.multi_agent=false",
             "-c", f"web_search={web_mode}", "-c", f"daybreak={'true' if daybreak else 'false'}",
+            "-c", f"sandbox_workspace_write.network_access={'true' if config['network_access'] == 'on' else 'false'}",
             "--cyber-access-program", "daybreak_blue" if daybreak else "standard",
             "-s", "workspace-write", "--json", "--output-schema", str(schema),
             "-o", str(workdir / "last-message.txt"), prompt]
@@ -169,7 +170,9 @@ def build_tui_command(config: dict, workdir: Path, web_mode: str, codex_path: st
     return [codex_path, "--strict-config", "-C", str(workdir), "-m", config["model"],
             "-c", f"model_reasoning_effort={config['effort']}", "-c", "model_provider=openai",
             "-c", f"daybreak={'true' if config['daybreak'] == 'blue' else 'false'}",
-            "-c", f"web_search={web_mode}", "-a", "on-request", "-s", "workspace-write"]
+            "-c", f"web_search={web_mode}",
+            "-c", f"sandbox_workspace_write.network_access={'true' if config['network_access'] == 'on' else 'false'}",
+            "-a", "on-request", "-s", "workspace-write"]
 
 
 def classify_failure(text: str) -> str:
@@ -187,7 +190,7 @@ def classify_failure(text: str) -> str:
     return "tool_failure"
 
 
-def common_prompt(category: str, case_id: str, case: dict, switches: dict) -> str:
+def common_prompt(category: str, case_id: str, case: dict, switches: dict, config: dict) -> str:
     lines = [
         f"Work only on the user-selected {category} case {case_id}. Scope: {case['scope_note']}",
         f"Use the ctf-{category} project skill as a technique reference. Task files are only in input/.",
@@ -199,6 +202,9 @@ def common_prompt(category: str, case_id: str, case: dict, switches: dict) -> st
         'Each artifact is an object such as {"path":"analysis.py"} with a bare relative path. The manager hashes the file.',
         "Cite public URLs used, and label answer-informed or reference-assisted reasoning accurately.",
     ]
+    lines.append("Sandbox outbound network access is requested On. Contact only the approved target; this setting is not a host firewall." if
+                 config["network_access"] == "on" else
+                 "Sandbox outbound network access is requested Off. Do not try to contact a live target in this run.")
     target = case.get("authorized_target")
     lines.append(f"The only approved live target is {target}." if target else "No live challenge target is authorized.")
     lines.append("Public similar-challenge search is allowed; use ctf-similar-search and cite sources." if switches["similar_search"] else
@@ -331,13 +337,16 @@ def run_external(category: str, case_id: str, config: dict, switches: dict,
     try:
         settings = {**config, **switches, "category": category, "case_id": case_id, "created_at": utc_now(),
                     "answer_reference_sha256": answer_hash, "web_search_mode": web_mode,
+                    "network_access_requested": config["network_access"] == "on",
+                    "network_access_effective": "unverified", "network_host_restriction": False,
+                    "approval_policy_requested": "on-request", "approval_policy_effective": "unverified",
                     "upstream_ctf_skills_revision": SOURCE_REVISION, "auth_mode": "codex_chatgpt_login_status_checked",
                     "server_daybreak_applied": "unverified", "model_availability": "unverified_before_request"}
         (run_root / "settings.json").write_text(json.dumps(settings, indent=2) + "\n", encoding="utf-8")
         schema = run_root / "output-schema.json"
         write_schema(case["input_sha256"], schema)
         deadline = time.monotonic() + case["time_limit_minutes"] * 60
-        base = common_prompt(category, case_id, case, switches)
+        base = common_prompt(category, case_id, case, switches, config)
     except KeyboardInterrupt:
         forced_status = "cancelled"
         run_error_type = "KeyboardInterrupt"
@@ -436,6 +445,9 @@ def run_external(category: str, case_id: str, config: dict, switches: dict,
                   "search-enabled-no-source-declared" if switches["similar_search"] else "no-reference-requested")
     summary = {"category": category, "case_id": case_id, "status": status, "ended_at": utc_now(),
                "run_error_type": run_error_type,
+               "network_access_requested": config["network_access"] == "on",
+               "network_access_effective": "unverified", "network_host_restriction": False,
+               "approval_policy_requested": "on-request", "approval_policy_effective": "unverified",
                "candidate_file": "candidate.txt" if candidate_hash else None,
                "candidate_sha256": candidate_hash, "provenance_class": provenance,
                "source_urls_declared": urls, "model_requested": config["model"],

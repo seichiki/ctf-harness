@@ -11,7 +11,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from harness.config import DAYBREAK, EFFORTS, ORCHESTRATION, ROOT, load, save, validate
+from harness.config import DAYBREAK, EFFORTS, NETWORK_ACCESS, ORCHESTRATION, ROOT, load, save, validate
 from harness.runner import (
     CATEGORIES, SOURCE_REVISION, build_tui_command, case_dir, category_dir,
     choose_switches, common_prompt, init_case, load_case, prepare_role,
@@ -57,7 +57,7 @@ def run_interactive(category: str, case_id: str, config: dict, switches: dict,
     run_root.mkdir(parents=True, exist_ok=False)
     role_dir = prepare_role(run_root, "interactive", case_path / "input", switches, answer_file)
     web_mode = "live" if switches["similar_search"] else "disabled"
-    rules = common_prompt(category, case_id, case, switches)
+    rules = common_prompt(category, case_id, case, switches, config)
     (role_dir / "AGENTS.md").write_text(
         "# Current interactive case\n\n" + rules + "\n\n"
         + ("Before asking about the challenge, select `/model` → `Daybreak Blue` and check `/daybreak` is On. "
@@ -68,6 +68,9 @@ def run_interactive(category: str, case_id: str, config: dict, switches: dict,
     command = build_tui_command(config, role_dir, web_mode, codex)
     record = {**config, **switches, "category": category, "case_id": case_id, "created_at": utc_now(),
               "answer_reference_sha256": answer_hash, "web_search_mode": web_mode,
+              "network_access_requested": config["network_access"] == "on",
+              "network_access_effective": "unverified", "network_host_restriction": False,
+              "approval_policy_requested": "on-request", "approval_policy_effective": "unverified",
               "blue_model_selection": "unknown" if config["daybreak"] == "blue" else "not_requested",
               "server_daybreak_applied": "unverified", "initial_challenge_prompt": None,
               "upstream_ctf_skills_revision": SOURCE_REVISION}
@@ -101,8 +104,9 @@ def menu() -> list[str]:
         effort = input("Effort [medium]: ").strip().lower() or "medium"
         daybreak = input("Daybreak [off/blue, default off]: ").strip().lower() or "off"
         orchestration = input("Orchestration [single/multi/interactive, default single]: ").strip().lower() or "single"
+        network_access = input("Outbound network [off/on, default off]: ").strip().lower() or "off"
         return ["setup", "--model", model, "--effort", effort, "--daybreak", daybreak,
-                "--orchestration", orchestration]
+                "--orchestration", orchestration, "--network-access", network_access]
     if action not in ("init", "seal", "run"):
         raise ValueError("unknown action")
     category = input("Category: ").strip().lower()
@@ -115,7 +119,9 @@ def menu() -> list[str]:
         effort = input("Effort override [use local config]: ").strip().lower()
         daybreak = input("Daybreak override [off/blue, use local config]: ").strip().lower()
         orchestration = input("Orchestration override [single/multi/interactive, use local config]: ").strip().lower()
-        for key, value in (("model", model), ("effort", effort), ("daybreak", daybreak), ("orchestration", orchestration)):
+        network_access = input("Outbound network override [off/on, use local config]: ").strip().lower()
+        for key, value in (("model", model), ("effort", effort), ("daybreak", daybreak),
+                           ("orchestration", orchestration), ("network-access", network_access)):
             if value:
                 args += [f"--{key}", value]
         args += ["--preset", input("Preset [test]: ").strip().lower() or "test"]
@@ -137,6 +143,7 @@ def main(argv: list[str] | None = None) -> int:
     setup.add_argument("--effort", choices=EFFORTS, default="medium")
     setup.add_argument("--daybreak", choices=DAYBREAK, default="off")
     setup.add_argument("--orchestration", choices=ORCHESTRATION, default="single")
+    setup.add_argument("--network-access", choices=NETWORK_ACCESS, default="off")
     sub.add_parser("doctor", help="check local CLI/uv/source presence without model requests")
     sub.add_parser("list", help="list category names and case IDs")
     init = sub.add_parser("init", help="create empty case input directory")
@@ -155,6 +162,7 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--effort", choices=EFFORTS)
     run.add_argument("--daybreak", choices=DAYBREAK)
     run.add_argument("--orchestration", choices=ORCHESTRATION)
+    run.add_argument("--network-access", choices=NETWORK_ACCESS)
     run.add_argument("--preset", choices=("test", "production"), default="test")
     run.add_argument("--similar-search", choices=("auto", "on", "off"), default="auto")
     run.add_argument("--answer-reference", choices=("auto", "on", "off"), default="auto")
@@ -164,7 +172,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.action == "setup":
             path = save(validate({"model": args.model, "effort": args.effort,
-                                  "daybreak": args.daybreak, "orchestration": args.orchestration}))
+                                  "daybreak": args.daybreak, "orchestration": args.orchestration,
+                                  "network_access": args.network_access}))
             print(f"Saved local choices: {path}; model availability is account-dependent and not yet verified")
         elif args.action == "doctor":
             print(json.dumps(doctor(), indent=2))
@@ -176,7 +185,8 @@ def main(argv: list[str] | None = None) -> int:
         elif args.action == "seal":
             print(json.dumps(seal_case(args.category, args.case_id), indent=2))
         elif args.action == "run":
-            config = load({key: getattr(args, key) for key in ("model", "effort", "daybreak", "orchestration")})
+            config = load({key: getattr(args, key) for key in
+                           ("model", "effort", "daybreak", "orchestration", "network_access")})
             switches = choose_switches(args.preset, args.similar_search, args.answer_reference)
             case_path, case = load_case(args.category, args.case_id)
             answer_file, answer_hash = resolve_reference(switches, args.answer_file, args.dry_run)
@@ -185,6 +195,9 @@ def main(argv: list[str] | None = None) -> int:
                     "answer_file_supplied": answer_file is not None,
                     "web_search_config": "live" if switches["similar_search"] else "disabled",
                     "search_skill": "run-local" if switches["similar_search"] else "absent",
+                    "network_access_requested": config["network_access"] == "on",
+                    "network_access_effective": "unverified", "network_host_restriction": False,
+                    "approval_policy_requested": "on-request", "approval_policy_effective": "unverified",
                     "auth": "existing ChatGPT Codex sign-in; no API fallback",
                     "model_availability": "account-dependent, unverified",
                     "daybreak_server_applied": "unverified", "network_isolation": False}

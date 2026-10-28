@@ -2,7 +2,7 @@
 
 # CTF ハーネス
 
-カテゴリ別に使える、ソースコードだけで構成した Codex CLI 用ハーネスです。**自分の ChatGPT アカウントで Codex にサインイン**し、そのアカウントで利用できるモデル ID を指定します。公開版の初期設定は Daybreak **オフ**、**単体**セッションです。Daybreak Blue と複数セッションによる実行は、自分で選んだ場合だけ有効になります。API キー、有料モデル API への自動切替、フラグの自動提出、問題データ、過去の実行記録は含みません。
+カテゴリ別に使える、ソースコードだけで構成した Codex CLI 用ハーネスです。**自分の ChatGPT アカウントで Codex にサインイン**し、そのアカウントで利用できるモデル ID を指定します。公開版の初期設定は Daybreak **オフ**、**単体**セッション、サンドボックスの外向き通信 **オフ** です。Daybreak Blue、複数セッション、外向き通信は明示的に選んだ場合だけ有効になります。API キー、有料モデル API への自動切替、フラグの自動提出、問題データ、過去の実行記録は含みません。
 
 ## Linux または Ubuntu WSL で始める
 
@@ -23,7 +23,7 @@ codex login                      # 自分の ChatGPT アカウントでサイン
 ./ctf-start run --category crypto --case-id sample --preset test
 ```
 
-`setup` が書き込むのは、Git の対象外になっている `.local/config.toml` だけです。ここにはモデル ID、推論の強度、Daybreak の指定、実行方式を保存し、認証情報はコピーしません。設定ファイルが既にある場合は、`config.example.toml` を確認してから直接編集してください。推論の強度の初期値は `medium` です。使用モデルが対応する強度を選んでください。設定ファイルにモデル名を書いても、そのモデルを利用する権限が得られるわけではありません。`run` に `--model`、`--effort`、`--daybreak`、`--orchestration` を指定すると、その実行の全セッションでローカル設定より優先されます。
+`setup` が書き込むのは、Git の対象外になっている `.local/config.toml` だけです。ここにはモデル ID、推論の強度、Daybreak、実行方式、`network_access = "off"` または `"on"` を保存し、認証情報はコピーしません。既存のローカル設定に `network_access` がなければオフになります。設定ファイルが既にある場合は、`config.example.toml` を確認してから直接編集してください。推論の強度の初期値は `medium` です。使用モデルが対応する強度を選んでください。設定ファイルにモデル名を書いても、そのモデルを利用する権限が得られるわけではありません。`run` に `--model`、`--effort`、`--daybreak`、`--orchestration`、`--network-access off|on` を指定すると、その実行の全セッションでローカル設定より優先されます。
 
 所有者が `.local/config.toml` に保存する設定例は、`./ctf-start setup --model gpt-5.6-sol --effort high --daybreak blue --orchestration multi` です。これは任意です。Blue を使えない人は `--daybreak off` のまま、自分が使えるモデルを選べます。選んだモデル、強度、アクセス区分が利用できなければ、失敗を記録して停止します。黙って別のものには切り替えません。
 
@@ -31,7 +31,9 @@ codex login                      # 自分の ChatGPT アカウントでサイン
 
 `--orchestration single` は新しい CLI セッションを1つ起動します。公開版の初期値です。`--orchestration multi` は、最初の検証役、並列に動く独立した2つの解答役、結果を固定してから確認する別の検証役を起動します。それぞれ別の CLI プロセスであり、Codex のネイティブなサブエージェントではありません。`--orchestration interactive` は、問題文を自動送信せずに新しい対話セッションを開きます。対話モードで Blue を使うときは、文書化された `daybreak=true` を指定したうえで、問題を入力する前に `/model` から **Daybreak Blue** を選んでください。選択状況は利用者の確認に基づいて「選択済み」または「不明」と記録します。サーバー側で適用されたことの証明にはなりません。オフの場合は `daybreak=false` と Blue ではないモデルを明示します。非対話のオフ設定では、さらに `--cyber-access-program standard` を指定します。Blue 設定では、各 `codex exec` に `daybreak_blue` を指定します。非対話実行ではグローバルのユーザー設定を読み込まず、既存の ChatGPT サインインを利用します。子 Codex プロセスへ渡す環境変数から API キーを除外します。
 
-`--preset test` の初期値は、類似問題検索オフ・正解参照オフです。`--preset production` の初期値は、類似問題検索オン・正解参照オフです。検索はプリセットとは別に `--similar-search on|off` で切り替えられます。正解ファイルをすべての役割に渡す意図がある場合だけ、`--answer-reference on --answer-file /path/to/reference` を指定してください。設定を変えるたびに新しい実行フォルダを作ります。検索オンでは Codex 内蔵の Web 検索とローカルの `ctf-similar-search` アダプターを使い、Tavily キーや追加の API は不要です。検索オフでは `web_search=disabled` を設定し、そのアダプターを役割フォルダに配置しません。これはツールと指示の設定であり、**ネットワーク分離ではありません**。明示的に許可された問題サーバーへモデルが接続できる場合があります。実行記録と問題ファイルは Git の対象外ですが、フォルダを分けるだけでは OS レベルで他の読取可能なファイルへのアクセスを遮断できません。
+`--preset test` の初期値は、類似問題検索オフ・正解参照オフです。`--preset production` の初期値は、類似問題検索オン・正解参照オフです。検索はプリセットとは別に `--similar-search on|off` で切り替えられます。正解ファイルをすべての役割に渡す意図がある場合だけ `--answer-reference on --answer-file /path/to/reference` を指定してください。設定を変えるたびに新しい実行フォルダを作ります。検索オンでは Codex 内蔵の Web 検索とローカルの `ctf-similar-search` アダプターを使い、Tavily キーや追加の API は不要です。検索オフでは `web_search=disabled` を設定し、そのアダプターを役割フォルダに配置しません。検索・正解参照の設定とサンドボックスの外向き通信は独立しています。実行記録と問題ファイルは Git の対象外ですが、フォルダを分けるだけでは OS レベルで他の読取可能なファイルへのアクセスを遮断できません。
+
+外向き通信はすべてのプリセットで初期値オフです。許可済みの実問題で使うときは `./ctf-start run --category web --case-id <新しいケースID> --preset test --network-access on --dry-run` で確認し、`--dry-run` を外して実行します。オンは各役割の `sandbox_workspace_write.network_access=true` を、オフは `false` を要求します。**オンにしても問題サーバーだけに通信先を限定するわけではありません**。ケースの対象指定は指示であり、通信先を強制するファイアウォールではありません。dry-run、`settings.json`、`result.json` は要求した設定を記録しますが、実効的な通信許可の証明ではありません。ハーネスは `approval_policy=on-request` を要求しますが、Codex CLI 0.164.0 の非対話 `codex exec` で `approval: never` と表示された実例があります。外部実行で承認プロンプトが出ることを前提にしないでください。`workspace-write` サンドボックスを維持し、失敗しても制限の緩い方式へ切り替えません。
 
 外部実行では、問題ごとの制限時間は1～15分です。起動用プロンプト、CLI オプション、JSONL イベント、取得できた場合の使用量、参照した URL、候補のハッシュを記録します。`candidate_pending` は、候補の正否を**利用者が**確認する必要がある状態です。未知の配布バイナリやスクリプトをホストで直接実行せず、別途承認された隔離環境を使ってください。フラグは自動提出しません。
 
