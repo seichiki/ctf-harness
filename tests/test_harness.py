@@ -121,6 +121,137 @@ class CaseAndReportTests(unittest.TestCase):
                           report.validate_report(item, hashes, role))
 
 
+class RunnerExecutionTests(unittest.TestCase):
+    """Exercise run_external with fake Codex processes and temporary case files."""
+
+    def setUp(self):
+        self.folder = tempfile.TemporaryDirectory()
+        self.addCleanup(self.folder.cleanup)
+        self.root = Path(self.folder.name)
+        self.root_patch = patch.object(runner, "ROOT", self.root)
+        self.root_patch.start()
+        self.addCleanup(self.root_patch.stop)
+        case = runner.init_case("misc", "fixture", "Local test fixture only", 1, None)
+        (case / "input" / "statement.txt").write_text("A local test fixture.", encoding="utf-8")
+        runner.seal_case("misc", "fixture")
+        self.config = {"model": "gpt-5.6-sol", "effort": "high", "daybreak": "blue",
+                       "orchestration": "multi"}
+        self.switches = runner.choose_switches("test", "auto", "auto")
+
+    def run_mocked(self, scenarios=None, candidates=None):
+        scenarios = scenarios or {}
+        candidates = candidates or {}
+        calls = []
+
+        class FakeProcess:
+            pid = 12345
+
+            def __init__(self, command, cwd, stdout, stderr, env, start_new_session):
+                self.role = cwd.name
+                self.command = command
+                self.returncode = None
+                self.stopped = False
+                calls.append((self.role, command, cwd))
+                if scenarios.get(self.role) == "exception":
+                    raise RuntimeError("private-token-must-not-appear")
+                if scenarios.get(self.role) not in ("failure", "timeout", "cancel"):
+                    (cwd / "analysis.txt").write_text("Checked local fixture.\n", encoding="utf-8")
+                    item = {"candidate": candidates.get(self.role, "fixture-answer"),
+                            "input_sha256": runner.input_hashes(cwd / "input"),
+                            "method": "Checked the supplied local fixture without external access.",
+                            "evidence": ["Local fixture was read."],
+                            "reproduction_commands": ["cat input/statement.txt"],
+                            "artifacts": [{"path": "analysis.txt"}], "limitations": []}
+                    (cwd / "last-message.txt").write_text(json.dumps(item), encoding="utf-8")
+
+            def wait(self, timeout=None):
+                if not self.stopped and scenarios.get(self.role) == "timeout":
+                    raise subprocess.TimeoutExpired(self.command, timeout)
+                if not self.stopped and scenarios.get(self.role) == "cancel":
+                    raise KeyboardInterrupt
+                self.returncode = -15 if self.stopped else 1 if scenarios.get(self.role) == "failure" else 0
+                return self.returncode
+
+        def stop_process(proc):
+            proc.stopped = True
+            proc.returncode = -15
+
+        with patch.object(runner.shutil, "which", return_value="mock-codex"), \
+             patch.object(runner, "require_exec_capabilities"), \
+             patch.object(runner, "require_chatgpt_login"), \
+             patch.object(runner.subprocess, "Popen", FakeProcess), \
+             patch.object(runner, "stop_process_group", side_effect=stop_process):
+            path = runner.run_external("misc", "fixture", self.config, self.switches, None, None)
+        self.assertTrue(path.is_relative_to(self.root))
+        self.assertTrue((path / "result.json").is_file())
+        summary = json.loads((path / "result.json").read_text(encoding="utf-8"))
+        for role, command, cwd in calls:
+            self.assertTrue(cwd.is_relative_to(path))
+            self.assertEqual(command[command.index("-C") + 1], str(cwd))
+            self.assertEqual(command[command.index("-m") + 1], "gpt-5.6-sol")
+            self.assertEqual(command[command.index("--cyber-access-program") + 1], "daybreak_blue")
+            self.assertTrue((path / role / "run.json").is_file())
+        return path, summary, [role for role, _, _ in calls]
+
+    def test_successful_multi_roles_and_candidate(self):
+        path, summary, roles = self.run_mocked()
+        self.assertEqual(set(roles), {"verifier", "solver_a", "solver_b", "verifier_review"})
+        self.assertEqual(summary["status"], "candidate_pending")
+        self.assertEqual((path / "candidate.txt").read_text(encoding="utf-8"), "fixture-answer\n")
+        packet = json.loads((path / "verifier_review" / "frozen-reports.json").read_text(encoding="utf-8"))
+        self.assertEqual(set(packet), {"verifier", "solver_a", "solver_b"})
+
+    def test_verifier_failure_persists_partial_result(self):
+        path, summary, roles = self.run_mocked({"verifier": "failure"})
+        self.assertEqual(roles, ["verifier"])
+        self.assertEqual(summary["status"], "tool_failure")
+        self.assertEqual(summary["agent_statuses"], {"verifier": "tool_failure"})
+        self.assertFalse((path / "candidate.txt").exists())
+
+    def test_worker_exception_persists_sanitized_error(self):
+        path, summary, roles = self.run_mocked({"solver_b": "exception"})
+        self.assertEqual(set(roles), {"verifier", "solver_a", "solver_b"})
+        self.assertEqual(summary["status"], "tool_failure")
+        self.assertEqual(summary["agent_errors"], {"solver_b": "RuntimeError"})
+        self.assertNotIn("private-token-must-not-appear", (path / "result.json").read_text(encoding="utf-8"))
+        self.assertNotIn("private-token-must-not-appear", (path / "solver_b" / "run.json").read_text(encoding="utf-8"))
+        self.assertFalse((path / "candidate.txt").exists())
+
+    def test_setup_exception_after_run_directory_persists_result(self):
+        with patch.object(runner.shutil, "which", return_value="mock-codex"), \
+             patch.object(runner, "require_exec_capabilities"), \
+             patch.object(runner, "require_chatgpt_login"), \
+             patch.object(runner, "common_prompt", side_effect=RuntimeError("private-token-must-not-appear")), \
+             patch.object(runner.subprocess, "Popen") as popen:
+            path = runner.run_external("misc", "fixture", self.config, self.switches, None, None)
+        popen.assert_not_called()
+        result = (path / "result.json").read_text(encoding="utf-8")
+        self.assertEqual(json.loads(result)["status"], "tool_failure")
+        self.assertEqual(json.loads(result)["run_error_type"], "RuntimeError")
+        self.assertNotIn("private-token-must-not-appear", result)
+
+    def test_timeout_persists_other_worker_result(self):
+        path, summary, roles = self.run_mocked({"solver_a": "timeout"})
+        self.assertEqual(set(roles), {"verifier", "solver_a", "solver_b"})
+        self.assertEqual(summary["status"], "timeout")
+        self.assertEqual(summary["agent_statuses"]["solver_b"], "completed")
+        self.assertFalse((path / "candidate.txt").exists())
+
+    def test_disagreement_suppresses_top_level_candidate(self):
+        path, summary, roles = self.run_mocked(candidates={"verifier": "first-answer"})
+        self.assertEqual(len(roles), 4)
+        self.assertEqual(summary["status"], "disagreement")
+        self.assertIsNone(summary["candidate_file"])
+        self.assertFalse((path / "candidate.txt").exists())
+
+    def test_keyboard_interrupt_persists_cancellation(self):
+        path, summary, roles = self.run_mocked({"verifier": "cancel"})
+        self.assertEqual(roles, ["verifier"])
+        self.assertEqual(summary["status"], "cancelled")
+        self.assertEqual(summary["agent_statuses"], {"verifier": "cancelled"})
+        self.assertFalse((path / "candidate.txt").exists())
+
+
 class SourceAndExportTests(unittest.TestCase):
     def test_seven_source_adapters_and_license(self):
         root = config.ROOT

@@ -222,6 +222,21 @@ def prepare_role(run_root: Path, role: str, input_dir: Path, switches: dict, ans
     return workdir
 
 
+def stop_process_group(proc: subprocess.Popen) -> None:
+    try:
+        os.killpg(proc.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+    try:
+        proc.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        proc.wait()
+
+
 def run_agent(role: str, workdir: Path, prompt: str, deadline: float, hashes: dict,
               schema: Path, web_mode: str, config: dict, codex_path: str) -> dict:
     command = build_exec_command(config, workdir, schema, web_mode, prompt, codex_path)
@@ -230,6 +245,7 @@ def run_agent(role: str, workdir: Path, prompt: str, deadline: float, hashes: di
         "prompt_file": "prompt.txt"}, indent=2) + "\n", encoding="utf-8")
     record = {"role": role, "started_at": utc_now(), "status": "tool_failure", "returncode": None}
     start = time.monotonic()
+    interrupted = False
     with (workdir / "events.jsonl").open("w", encoding="utf-8") as out, (workdir / "stderr.txt").open("w", encoding="utf-8") as err:
         proc = subprocess.Popen(command, cwd=workdir, stdout=out, stderr=err,
                                 env=scrub_api_environment(), start_new_session=True)
@@ -237,13 +253,17 @@ def run_agent(role: str, workdir: Path, prompt: str, deadline: float, hashes: di
             record["returncode"] = proc.wait(timeout=max(1.0, deadline - time.monotonic()))
             record["status"] = "completed" if record["returncode"] == 0 else "tool_failure"
         except subprocess.TimeoutExpired:
-            os.killpg(proc.pid, signal.SIGTERM)
-            try:
-                proc.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                os.killpg(proc.pid, signal.SIGKILL)
-                proc.wait()
+            stop_process_group(proc)
             record["status"] = "timeout"
+            record["returncode"] = proc.returncode
+        except KeyboardInterrupt:
+            stop_process_group(proc)
+            record["status"] = "cancelled"
+            record["returncode"] = proc.returncode
+            interrupted = True
+        except BaseException:
+            stop_process_group(proc)
+            raise
     if record["status"] == "tool_failure":
         diagnostics = (workdir / "stderr.txt").read_text(encoding="utf-8", errors="replace")
         diagnostics += (workdir / "events.jsonl").read_text(encoding="utf-8", errors="replace")
@@ -276,6 +296,8 @@ def run_agent(role: str, workdir: Path, prompt: str, deadline: float, hashes: di
         record["report_sha256"] = sha256(path)
         record["artifact_sha256"] = {item["path"]: sha256(workdir / item["path"]) for item in report["artifacts"]}
     (workdir / "run.json").write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
+    if interrupted:
+        raise KeyboardInterrupt
     return record
 
 
@@ -302,51 +324,93 @@ def run_external(category: str, case_id: str, config: dict, switches: dict,
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     run_root = category_dir(category) / "runs" / case_id / f"{stamp}-{config['orchestration']}-{uuid.uuid4().hex[:6]}"
     run_root.mkdir(parents=True, exist_ok=False)
+    results: dict[str, dict] = {}
+    run_error_type = None
+    forced_status = None
     web_mode = "live" if switches["similar_search"] else "disabled"
-    settings = {**config, **switches, "category": category, "case_id": case_id, "created_at": utc_now(),
-                "answer_reference_sha256": answer_hash, "web_search_mode": web_mode,
-                "upstream_ctf_skills_revision": SOURCE_REVISION, "auth_mode": "codex_chatgpt_login_status_checked",
-                "server_daybreak_applied": "unverified", "model_availability": "unverified_before_request"}
-    (run_root / "settings.json").write_text(json.dumps(settings, indent=2) + "\n", encoding="utf-8")
-    schema = run_root / "output-schema.json"
-    write_schema(case["input_sha256"], schema)
-    deadline = time.monotonic() + case["time_limit_minutes"] * 60
-    base = common_prompt(category, case_id, case, switches)
+    try:
+        settings = {**config, **switches, "category": category, "case_id": case_id, "created_at": utc_now(),
+                    "answer_reference_sha256": answer_hash, "web_search_mode": web_mode,
+                    "upstream_ctf_skills_revision": SOURCE_REVISION, "auth_mode": "codex_chatgpt_login_status_checked",
+                    "server_daybreak_applied": "unverified", "model_availability": "unverified_before_request"}
+        (run_root / "settings.json").write_text(json.dumps(settings, indent=2) + "\n", encoding="utf-8")
+        schema = run_root / "output-schema.json"
+        write_schema(case["input_sha256"], schema)
+        deadline = time.monotonic() + case["time_limit_minutes"] * 60
+        base = common_prompt(category, case_id, case, switches)
+    except KeyboardInterrupt:
+        forced_status = "cancelled"
+        run_error_type = "KeyboardInterrupt"
+    except Exception as exc:
+        forced_status = "tool_failure"
+        run_error_type = type(exc).__name__
 
-    def execute(role: str, lead: str) -> dict:
-        workdir = prepare_role(run_root, role, case_path / "input", switches, answer_file)
-        result = run_agent(role, workdir, lead + " " + base, deadline, case["input_sha256"],
-                           schema, web_mode, config, codex_path)
-        if result.get("report_sha256"):
-            result["report_data"] = json.loads((workdir / "structured-report.json").read_text(encoding="utf-8"))
-        return result
-
-    if config["orchestration"] == "single":
-        results = {"solver": execute("solver", "Derive one supported candidate independently.")}
-    else:
-        verifier = execute("verifier", "First derive from input before any solver report exists.")
-        results = {"verifier": verifier}
-        if verifier["status"] == "completed" and time.monotonic() < deadline:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
-                futures = {
-                    "solver_a": pool.submit(execute, "solver_a", "Start with structural or mathematical hypotheses."),
-                    "solver_b": pool.submit(execute, "Start with formats, edge cases, or implementation details."),
-                }
-                results.update({name: future.result() for name, future in futures.items()})
-        if len(results) == 3 and all(r["status"] == "completed" for r in results.values()) and time.monotonic() < deadline:
-            review_dir = prepare_role(run_root, "verifier_review", case_path / "input", switches, answer_file)
-            packet = {role: results[role]["report_data"] for role in ("verifier", "solver_a", "solver_b")}
-            (review_dir / "frozen-reports.json").write_text(json.dumps(packet, indent=2) + "\n", encoding="utf-8")
-            result = run_agent("verifier_review", review_dir,
-                               "Review frozen-reports.json. This review is not independent derivation. " + base,
-                               deadline, case["input_sha256"], schema, web_mode, config, codex_path)
-            results["verifier_review"] = result
+    def execute(role: str, lead: str, frozen_reports: dict | None = None) -> dict:
+        workdir = run_root / role
+        try:
+            workdir = prepare_role(run_root, role, case_path / "input", switches, answer_file)
+            if frozen_reports is not None:
+                (workdir / "frozen-reports.json").write_text(json.dumps(frozen_reports, indent=2) + "\n", encoding="utf-8")
+            result = run_agent(role, workdir, lead + " " + base, deadline, case["input_sha256"],
+                               schema, web_mode, config, codex_path)
             if result.get("report_sha256"):
-                result["report_data"] = json.loads((review_dir / "structured-report.json").read_text(encoding="utf-8"))
+                result["report_data"] = json.loads((workdir / "structured-report.json").read_text(encoding="utf-8"))
+            return result
+        except Exception as exc:
+            # Do not persist exception text: subprocess errors can contain prompts or credentials.
+            record = {"role": role, "started_at": utc_now(), "status": "tool_failure",
+                      "returncode": None, "candidate": None, "report_sha256": None, "usage": "unknown"}
+            prior = workdir / "run.json"
+            if prior.is_file():
+                try:
+                    record.update(json.loads(prior.read_text(encoding="utf-8")))
+                except (OSError, json.JSONDecodeError):
+                    pass
+            record.update(status="tool_failure", error_type=type(exc).__name__, ended_at=utc_now())
+            workdir.mkdir(parents=True, exist_ok=True)
+            prior.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
+            return record
+
+    try:
+        if not forced_status and config["orchestration"] == "single":
+            results["solver"] = execute("solver", "Derive one supported candidate independently.")
+        elif not forced_status:
+            verifier = execute("verifier", "First derive from input before any solver report exists.")
+            results["verifier"] = verifier
+            if verifier["status"] == "completed" and time.monotonic() < deadline:
+                with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+                    futures = {
+                        "solver_a": pool.submit(execute, "solver_a", "Start with structural or mathematical hypotheses."),
+                        "solver_b": pool.submit(execute, "solver_b", "Start with formats, edge cases, or implementation details."),
+                    }
+                    for name, future in futures.items():
+                        results[name] = future.result()
+            if len(results) == 3 and all(r["status"] == "completed" for r in results.values()) and time.monotonic() < deadline:
+                packet = {role: results[role]["report_data"] for role in ("verifier", "solver_a", "solver_b")}
+                results["verifier_review"] = execute(
+                    "verifier_review", "Review frozen-reports.json. This review is not independent derivation.", packet)
+    except KeyboardInterrupt:
+        forced_status = "cancelled"
+        run_error_type = "KeyboardInterrupt"
+    except Exception as exc:
+        forced_status = "tool_failure"
+        run_error_type = type(exc).__name__
+
+    # An interrupt can arrive before a completed role is added to results.
+    for role in (("solver",) if config["orchestration"] == "single" else
+                 ("verifier", "solver_a", "solver_b", "verifier_review")):
+        record_path = run_root / role / "run.json"
+        if role not in results and record_path.is_file():
+            try:
+                results[role] = json.loads(record_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                pass
     expected_count = 1 if config["orchestration"] == "single" else 4
     failures = [r["status"] for r in results.values() if r["status"] != "completed"]
     candidate = None
-    if failures:
+    if forced_status:
+        status = forced_status
+    elif failures:
         status = failures[0]
     elif len(results) != expected_count:
         status = "timeout"
@@ -371,12 +435,15 @@ def run_external(category: str, case_id: str, config: dict, switches: dict,
                   "reference-assisted" if urls else
                   "search-enabled-no-source-declared" if switches["similar_search"] else "no-reference-requested")
     summary = {"category": category, "case_id": case_id, "status": status, "ended_at": utc_now(),
+               "run_error_type": run_error_type,
                "candidate_file": "candidate.txt" if candidate_hash else None,
                "candidate_sha256": candidate_hash, "provenance_class": provenance,
                "source_urls_declared": urls, "model_requested": config["model"],
                "effort_requested": config["effort"], "daybreak_requested": config["daybreak"],
                "daybreak_server_applied": "unverified", "native_subagent_spawn": False,
                "agent_statuses": {name: value["status"] for name, value in results.items()},
+               "agent_errors": {name: value["error_type"] for name, value in results.items() if value.get("error_type")},
+               "agent_report_sha256": {name: value.get("report_sha256") for name, value in results.items()},
                "agent_thread_ids": {name: value.get("thread_id") for name, value in results.items()},
                "agent_usage": {name: value.get("usage", "unknown") for name, value in results.items()}}
     (run_root / "result.json").write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
