@@ -1,0 +1,5 @@
+# Pinned third-party references
+
+This project includes selected Markdown reference files from [ljagiello/ctf-skills](https://github.com/ljagiello/ctf-skills), pinned to commit `2388a3bcd5f081836c9a038c54e26bc658d5b7d1`. The upstream MIT license and author notice are preserved at `third_party/ctf-skills/LICENSE`. The seven category wrappers point to their corresponding upstream `SKILL.md` and Markdown references. `ctf-similar-search` is adapted to built-in Codex web search; the original Tavily scripts are not included or run.
+
+Only Markdown references from the eight selected skill directories and the license are packaged. The upstream installer, model router, submission flow, Python/shell helpers, and unrelated skills are not included. Upstream prose may recommend tools, model choices, or command examples; those are reference material only and do not override local model, uv, approval, sandbox, target scope, or package-install choices. Review a new upstream revision before updating the pin.

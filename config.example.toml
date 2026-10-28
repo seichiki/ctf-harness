@@ -1,0 +1,6 @@
+# Copy this to .local/config.toml, or run ./ctf-start setup.
+# Use a model ID offered by your own Codex account. No model is assumed.
+model = "SET_YOUR_AVAILABLE_MODEL_ID"
+effort = "medium"
+daybreak = "off"
+orchestration = "single"

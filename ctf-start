@@ -1,0 +1,8 @@
+#!/bin/sh
+set -eu
+cd "$(dirname "$0")"
+if ! command -v uv >/dev/null 2>&1; then
+  echo "uv is required. Install uv and Python 3.12, then run: uv sync --locked" >&2
+  exit 127
+fi
+exec uv run --offline --locked python -m harness.cli "$@"
