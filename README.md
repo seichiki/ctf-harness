@@ -1,3 +1,5 @@
+[English](README.md) | [日本語](README.ja.md)
+
 # CTF harness
 
 A source-only, category-aware Codex CLI harness. It uses **your own ChatGPT Codex sign-in** and a model ID you choose from your account. Public defaults are Daybreak **off** and **single** session. Daybreak Blue and the external multi-session workflow are opt-in. No API key, paid model API fallback, target submission, challenge input, or past run is included.
@@ -35,9 +37,9 @@ Each case has a 1–15 minute deadline for external runs. The launcher records p
 
 ## Source map and publication
 
-See [docs/INSTRUCTION-MAP.md](docs/INSTRUCTION-MAP.md) for all seven `AGENTS.md` and skill paths, plus generated role files. Upstream source and the MIT notice are documented in [docs/THIRD_PARTY.md](docs/THIRD_PARTY.md). Python is dependency-free and locked with uv; category-specific tools are optional and must be installed separately only if a chosen challenge requires them.
+See the instruction map ([English](docs/INSTRUCTION-MAP.md) | [日本語](docs/INSTRUCTION-MAP.ja.md)) for all seven `AGENTS.md` and skill paths, plus generated role files. Upstream source and the MIT notice are documented in [docs/THIRD_PARTY.md](docs/THIRD_PARTY.md). Python is dependency-free and locked with uv; category-specific tools are optional and must be installed separately only if a chosen challenge requires them.
 
-This source folder currently has no `.git` repository. After reviewing the source, create a new empty GitHub repository under your account, then run these commands locally. Replace the URL with your own repository; nothing is uploaded by this harness.
+If you are publishing a new source-only copy, review the source, create an empty GitHub repository under your account, then run these commands locally. Replace the URL with your own repository. If you have already pushed this project, keep its existing Git repository and remote; skip `git init` and `git remote add origin`. Nothing is uploaded by running the harness itself.
 
 ```sh
 cd ~/ctf/ctf-harness
@@ -52,6 +54,6 @@ git remote add origin https://github.com/<OWNER>/<REPO>.git
 git push -u origin main
 ```
 
-Do not force-add ignored files. `.gitignore` cannot remove a secret already committed to history, so use a new source-only repository if that ever happens. No repository creation, commit, remote, or upload was performed during this handoff.
+Do not force-add ignored files. `.gitignore` cannot remove a secret already committed to history, so use a new source-only repository if that ever happens. For an existing repository, review `git status --short` and `git add -n .` before committing documentation changes and pushing to its existing remote.
 
 To later make this the owner's `~/ctf/daybreak-blue`, follow [docs/MIGRATION.md](docs/MIGRATION.md) after the new repository and fresh clone have been reviewed. This handoff has **not** moved or deleted the old project.

@@ -1,3 +1,5 @@
+[English](INSTRUCTION-MAP.md) | [日本語](INSTRUCTION-MAP.ja.md)
+
 # Instruction and configuration map
 
 The root `AGENTS.md` applies to every case. Each category adds its own `AGENTS.md` and discoverable `.agents/skills/ctf-<category>/SKILL.md`. An adapter instructs Codex to open the pinned upstream Markdown reference when relevant; upstream files under `third_party/` are not themselves active skills.
