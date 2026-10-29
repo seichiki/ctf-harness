@@ -35,7 +35,7 @@ An explicit `run` displays its saved target/scope and settings on stderr, then a
 
 `setup` writes only `.local/config.toml`, which Git ignores. It stores the model ID, effort, Daybreak, orchestration, network access, live progress, optional HTTP proxy endpoint, and GPT writeup draft toggle; it does **not** copy authentication. Existing local configs without new fields use safe defaults (`network_access = "off"`, `progress = false`, `proxy_url = ""`, `writeup_draft = false`). If you already have a local config, edit it directly after reviewing `config.example.toml`; `setup` will not overwrite it. A model name in this file does not grant access. `run` reads saved values, then applies explicit CLI overrides only to that invocation: `--model`, `--effort`, `--daybreak`, `--orchestration`, `--network-access off|on`, `--progress`/`--no-progress`, `--proxy URL`/`--no-proxy`, and `--writeup-draft`/`--no-writeup-draft`.
 
-GPT drafting defaults off. Add `writeup_draft = true` to `.local/config.toml`, or use `--writeup-draft` on an explicit `run`, to enable it. Only after the owner reports official acceptance with `solved` and `ACCEPT <candidate-ID>` does the harness save the original result and start one separate Codex CLI session. The writer receives bounded excerpts of the problem statement, accepted candidate, origin roles' recorded commands, exits, output and text artifacts; `SOLUTION.md` and the structured reports' method prose are excluded. Role-created text artifacts can contain model assertions and are not independently verified evidence. The writer requests no web search or shell network, a read-only sandbox and standard access program, using the saved model ID and effort. `WRITEUP_DRAFT.md` is an unverified draft; `writeup/WRITEUP_EVIDENCE.md` preserves the exact curated evidence sent. Credential masking is best effort, so inspect both before sharing. A draft failure or timeout leaves the original `user_confirmed` result intact and records the draft status in `result.json`. Unconfirmed candidates and interactive sessions do not trigger drafting.
+GPT drafting defaults off. Add `writeup_draft = true` to `.local/config.toml`, or use `--writeup-draft` on an explicit `run`, to enable it. Only after the owner reports official acceptance with `solved` and `ACCEPT <candidate-ID>` does the harness save the original result and start one separate Codex CLI session. The writer receives bounded excerpts of the problem statement, accepted candidate, origin roles' recorded commands, exits, output and text artifacts; `SOLUTION.md` and the structured reports' method prose are excluded. Role-created text artifacts can contain model assertions and are not independently verified evidence. The writer requests no web search or shell network, a read-only sandbox and the access program selected for the writeup role, using that role's resolved model and effort. `WRITEUP_DRAFT.md` is an unverified draft; `writeup/WRITEUP_EVIDENCE.md` preserves the exact curated evidence sent. Credential masking is best effort, so inspect both before sharing. A draft failure or timeout leaves the original `user_confirmed` result intact and records the draft status in `result.json`. Unconfirmed candidates and interactive sessions do not trigger drafting.
 
 After setting your personal defaults, use `./ctf-start` to create a new problem interactively. For an existing sealed case, `./ctf-start run --category web --case-id <existing-case-id> --preset test` starts a fresh run. A one-off quiet explicit run can use `--quiet` to suppress startup status and live progress while retaining the final JSON on stdout. For other explicit runs, a short requested-settings line goes to stderr; it says only whether a proxy is active, never its URL. Check the dry-run plan before real target access.
 
@@ -46,6 +46,27 @@ Interactive sessions create a basic handoff with settings and exit status; termi
 
 During a new-problem wizard run, a candidate from a completed valid role report is shown with a stable ID such as `C1`. Submit it yourself to the official challenge. If that **exact candidate** is accepted while the run is still active, type `solved` in the same terminal, select its ID, inspect the full string, then type `ACCEPT C1`. When the roles finish with at least one displayed candidate and no `solved` confirmation, the run waits for your official submission result before finalizing. Type `solved` for an accepted candidate, `wrong` only if you tried every displayed candidate and all were rejected, or `skip` to exit without checking. This human review wait is outside the agent deadline. Closed terminal input exits as unreviewed; Ctrl-C cancels. Only terminal input can confirm acceptance; model messages and tool output cannot. The harness saves `OWNER_CONFIRMATION.json` and attempts `SOLUTION.md` before stopping remaining run-owned Codex process groups and records `user_confirmed` in `result.json`. `wrong` records `owner_review: all_rejected` and `candidate_rejected`. These are **owner-reported official submission outcomes**, not server verification by the harness. `SOLUTION.md` combines recorded command starts/exits with clearly labeled role-reported method, evidence, reproduction commands and limitations; missing outputs and steps are not invented. Keep the original input and event files with it for a complete writeup. To enable the same control on an explicit existing-case run, add `--owner-confirmation` in a terminal; it is off by default and cannot be combined with `--quiet` or interactive orchestration.
 The harness atomically saves `OWNER_CONFIRMATION.json` before stopping child processes. If `SOLUTION.md` cannot be generated, the acceptance record and original role logs remain, and finalization retries the writeup. If even the acceptance record cannot be saved, the run is not stopped or marked confirmed. The control requires the foreground terminal; its input is not passed to child Codex processes.
+
+## Role-specific models
+
+Add TOML tables at the end of the Git-ignored `.local/config.toml`. Each table may specify any of `model`, `effort`, and `daybreak`; omitted fields inherit the shared values.
+
+```toml
+[role_settings.verifier]
+model = "gpt-5.6-sol"
+effort = "high"
+daybreak = "blue"
+
+[role_settings.solver_b]
+model = "YOUR_AVAILABLE_MODEL_ID"
+
+[role_settings.writeup]
+daybreak = "off"
+```
+
+Replace the placeholder with a real model ID available to your account. Supported role names are `solver` (single), `verifier`, `solver_a`, `solver_b`, `verifier_review` (multi), `writeup` (draft), and `interactive` (terminal). One-run global overrides such as `--model` change only the shared fallback, not explicit role settings. The startup plan and `settings.json` / `result.json` record resolved `role_requests`; each role's `run.json` records its requested model, effort and Daybreak. These requests do not prove account entitlement or server application. Interactive Daybreak Blue still requires selecting the visible Blue item.
+
+For the `writeup` role only, an omitted Daybreak choice stays `off` to preserve its previous standard-access behavior, even when the shared value is `blue`. An explicit `role_settings.writeup.daybreak` overrides this exception.
 
 ## Modes and controls
 

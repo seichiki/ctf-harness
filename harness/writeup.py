@@ -11,6 +11,7 @@ import tempfile
 from pathlib import Path
 from typing import Callable
 
+from harness.config import role_choice
 from harness.progress import render_command
 
 
@@ -169,12 +170,14 @@ def generate_draft(run_root: Path, case_path: Path, accepted: dict, config: dict
               "<recorded_evidence>\n" + evidence + "\n</recorded_evidence>")
     _atomic_text(workdir / "prompt.txt", prompt + "\n")
     message = workdir / "last-message.txt"
+    choice = role_choice(config, "writeup")
+    blue = choice["daybreak"] == "blue"
     command = [codex_path, "exec", "--strict-config", "--ignore-user-config", "--ephemeral", "-C", str(workdir),
-               "-m", config["model"], "-c", f"model_reasoning_effort={config['effort']}",
+               "-m", choice["model"], "-c", f"model_reasoning_effort={choice['effort']}",
                "-c", "approval_policy=on-request", "-c", "features.multi_agent=false",
-               "-c", "web_search=disabled", "-c", "daybreak=false",
+               "-c", "web_search=disabled", "-c", f"daybreak={'true' if blue else 'false'}",
                "-c", "sandbox_workspace_write.network_access=false",
-               "--cyber-access-program", "standard", "-s", "read-only", "--json",
+               "--cyber-access-program", "daybreak_blue" if blue else "standard", "-s", "read-only", "--json",
                "-o", str(message), prompt]
     _atomic_text(workdir / "invocation.json", json.dumps({"argv_without_prompt": command[:-1],
         "prompt_file": "prompt.txt", "network_access_requested": False}, indent=2) + "\n")
@@ -197,5 +200,6 @@ def generate_draft(run_root: Path, case_path: Path, accepted: dict, config: dict
                  "This text was generated from selected recorded evidence. Check every claim against the logs before sharing.\n\n"
                  + content.strip() + "\n")
     return {"status": "completed", "file": "WRITEUP_DRAFT.md",
-            "evidence_file": "writeup/WRITEUP_EVIDENCE.md", "model_requested": config["model"],
+            "evidence_file": "writeup/WRITEUP_EVIDENCE.md", "model_requested": choice["model"],
+            "effort_requested": choice["effort"], "daybreak_requested": choice["daybreak"],
             "network_access_requested": False}

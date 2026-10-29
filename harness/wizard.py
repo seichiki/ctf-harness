@@ -14,7 +14,7 @@ from urllib.parse import urlsplit
 
 from harness import runner
 from harness.confirm import ConfirmationCancelled, ask
-from harness.config import CATEGORIES, ROOT, load, public_settings
+from harness.config import CATEGORIES, ROOT, active_roles, load, public_settings, role_choice
 from harness.locks import category_lock
 from harness.report import sha256
 
@@ -186,7 +186,10 @@ def _summarize(case: Path, data: dict, config: dict, switches: dict) -> None:
     print(f"  許可範囲: {data['scope_note']}")
     print(f"  制限時間: {data['minutes']}分 / プリセット: {switches['preset']}")
     print(f"  類似検索: {'on' if switches['similar_search'] else 'off'} / 正解参照: off")
-    print(f"  モデル: {config['model']} / effort: {config['effort']} / Daybreak: {config['daybreak']}")
+    print(f"  共通モデル: {config['model']} / effort: {config['effort']} / Daybreak: {config['daybreak']}")
+    for role in active_roles(config["orchestration"], bool(config.get("writeup_draft"))):
+        choice = role_choice(config, role)
+        print(f"  {role}: {choice['model']} / effort: {choice['effort']} / Daybreak: {choice['daybreak']}")
     print(f"  実行方式: {config['orchestration']} / ネットワーク: {config['network_access']}")
     print(f"  プロキシ: {'on' if public['proxy_active'] else 'off'} / 進行表示: {'on' if config['progress'] else 'off'}")
     print(f"  GPT writeup下書き: {'on' if config.get('writeup_draft', False) else 'off'}（正解報告後のみ）")

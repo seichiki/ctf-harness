@@ -13,7 +13,7 @@ from pathlib import Path
 
 from harness.archive import archive_categories, list_archives, restore_archive
 from harness.confirm import ConfirmationCancelled, ask
-from harness.config import DAYBREAK, EFFORTS, NETWORK_ACCESS, ORCHESTRATION, ROOT, load, public_settings, save, validate
+from harness.config import DAYBREAK, EFFORTS, NETWORK_ACCESS, ORCHESTRATION, ROOT, active_roles, load, public_settings, role_choice, save, validate
 from harness.locks import category_lock
 from harness.handoff import Handoff
 from harness.progress import render_command
@@ -82,10 +82,11 @@ def _run_interactive(category: str, case_id: str, config: dict, switches: dict,
     role_dir = prepare_role(run_root, "interactive", case_path / "input", switches, answer_file)
     web_mode = "live" if switches["similar_search"] else "disabled"
     rules = common_prompt(category, case_id, case, switches, config)
+    choice = role_choice(config, "interactive")
     (role_dir / "AGENTS.md").write_text(
         "# Current interactive case\n\n" + rules + "\n\n"
         + ("Before asking about the challenge, select `/model` → `Daybreak Blue` and check `/daybreak` is On. "
-           "The launcher does not know a Blue model ID.\n" if config["daybreak"] == "blue" else
+           "The launcher does not know a Blue model ID.\n" if choice["daybreak"] == "blue" else
            "Daybreak is explicitly Off for this run. Use the selected non-Blue model.\n"),
         encoding="utf-8",
     )
@@ -95,13 +96,14 @@ def _run_interactive(category: str, case_id: str, config: dict, switches: dict,
               "network_access_requested": config["network_access"] == "on",
               "network_access_effective": "unverified", "network_host_restriction": False,
               "approval_policy_requested": "on-request", "approval_policy_effective": "unverified",
-              "blue_model_selection": "unknown" if config["daybreak"] == "blue" else "not_requested",
+              "blue_model_selection": "unknown" if choice["daybreak"] == "blue" else "not_requested",
+              "role_requests": {"interactive": choice},
               "server_daybreak_applied": "unverified", "initial_challenge_prompt": None,
               "upstream_ctf_skills_revision": SOURCE_REVISION}
     settings_file = run_root / "settings.json"
     settings_file.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
     (role_dir / "invocation.json").write_text(json.dumps({"argv": redact_proxy_command(command), "prompt": None}, indent=2) + "\n", encoding="utf-8")
-    if config["daybreak"] == "blue":
+    if choice["daybreak"] == "blue":
         print("Daybreak is requested On. Before sending a challenge, select /model → Daybreak Blue and check /daybreak.")
     else:
         print("Daybreak is explicitly Off; the selected account model is used. No challenge prompt was sent.")
@@ -343,10 +345,13 @@ def main(argv: list[str] | None = None) -> int:
             if args.owner_confirmation and config["orchestration"] == "interactive":
                 raise ValueError("owner confirmation is for external runs, not interactive Codex sessions")
             switches = choose_switches(args.preset, args.similar_search, args.answer_reference)
+            role_requests = {role: role_choice(config, role) for role in
+                             active_roles(config["orchestration"], bool(config.get("writeup_draft")))}
             case_path, case = load_case(args.category, args.case_id)
             answer_file, answer_hash = resolve_reference(switches, args.answer_file, args.dry_run)
             plan = {**public_settings(config), **switches, "category": args.category, "case_id": args.case_id,
                     "owner_confirmation_requested": args.owner_confirmation,
+                    "role_requests": role_requests,
                     "case_dir": str(case_path), "input_file_count": len(case["input_sha256"]),
                     "answer_file_supplied": answer_file is not None,
                     "web_search_config": "live" if switches["similar_search"] else "disabled",
@@ -372,6 +377,8 @@ def main(argv: list[str] | None = None) -> int:
                       f"writeup_draft={'on' if config.get('writeup_draft', False) else 'off'}", file=sys.stderr)
                 print("Target: " + _safe_plan_value(case.get("authorized_target") or "none") +
                       " | scope: " + _safe_plan_value(case.get("scope_note") or ""), file=sys.stderr)
+                print("Role models: " + ", ".join(f"{role}={choice['model']}/{choice['effort']}/{choice['daybreak']}"
+                                                  for role, choice in role_requests.items()), file=sys.stderr)
                 if not ask("Start this run", yes=args.yes):
                     print("Run cancelled; no model or target request started.", file=sys.stderr)
                     return 0

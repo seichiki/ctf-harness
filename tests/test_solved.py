@@ -229,7 +229,8 @@ class OwnerControlTests(unittest.TestCase):
              patch.object(runner.subprocess, "Popen") as popen:
             with self.assertRaises(OwnerCancelledStop):
                 runner.run_agent("solver_a", workdir, "prompt", time.monotonic() + 2,
-                    {}, self.root / "schema.json", "disabled", {"proxy_url": ""}, "mock-codex",
+                    {}, self.root / "schema.json", "disabled",
+                    {"model": "mock-model", "effort": "low", "daybreak": "off", "proxy_url": ""}, "mock-codex",
                     owner_control=self.control)
             popen.assert_not_called()
 
@@ -238,6 +239,7 @@ class OwnerControlTests(unittest.TestCase):
         processes = []
         stopped = []
         records = {}
+        selected = {"model": "mock-model", "effort": "low", "daybreak": "off", "proxy_url": ""}
 
         class FakeProcess:
             def __init__(self, role):
@@ -268,7 +270,7 @@ class OwnerControlTests(unittest.TestCase):
             workdir = self.root / role
             workdir.mkdir()
             records[role] = runner.run_agent(role, workdir, "mock prompt", time.monotonic() + 5,
-                {}, self.root / "schema.json", "disabled", {"proxy_url": ""}, "mock-codex",
+                {}, self.root / "schema.json", "disabled", selected, "mock-codex",
                 owner_control=self.control)
 
         with patch.object(runner, "build_exec_command", return_value=["mock-codex"]), \
@@ -292,7 +294,7 @@ class OwnerControlTests(unittest.TestCase):
             third.mkdir()
             with self.assertRaises(OwnerConfirmedStop):
                 runner.run_agent("verifier_review", third, "mock prompt", time.monotonic() + 5,
-                    {}, self.root / "schema.json", "disabled", {"proxy_url": ""}, "mock-codex",
+                    {}, self.root / "schema.json", "disabled", selected, "mock-codex",
                     owner_control=self.control)
             self.assertEqual(popen.call_count, 2)
 

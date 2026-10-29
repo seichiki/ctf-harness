@@ -43,7 +43,8 @@ class WriteupTests(unittest.TestCase):
         self.accepted = {"candidate": candidate, "candidate_utf8_sha256":
                          hashlib.sha256(candidate.encode()).hexdigest(), "roles": ["solver"]}
         self.config = {"model": "gpt-5.6-sol", "effort": "high", "daybreak": "blue",
-                       "network_access": "on", "proxy_url": "http://127.0.0.1:8080"}
+                       "network_access": "on", "proxy_url": "http://127.0.0.1:8080",
+                       "role_settings": {"writeup": {"model": "gpt-6-luna", "effort": "low", "daybreak": "off"}}}
 
     def test_bundle_uses_recorded_evidence_without_prior_narrative_or_secrets(self):
         text = writeup.evidence_bundle(self.run, self.case, self.accepted)
@@ -100,11 +101,14 @@ class WriteupTests(unittest.TestCase):
                                             "mock-codex", lambda _: {"SAFE": "1"},
                                             lambda _: self.fail("stop not expected"))
         self.assertEqual(result["status"], "completed")
+        self.assertEqual(result["model_requested"], "gpt-6-luna")
         command, kwargs = calls[0]
         self.assertEqual(len(calls), 1)
         self.assertIn("--ignore-user-config", command)
         self.assertIn("sandbox_workspace_write.network_access=false", command)
         self.assertIn("web_search=disabled", command)
+        self.assertEqual(command[command.index("-m") + 1], "gpt-6-luna")
+        self.assertIn("model_reasoning_effort=low", command)
         self.assertEqual(command[command.index("-s") + 1], "read-only")
         self.assertEqual(command[command.index("--cyber-access-program") + 1], "standard")
         self.assertEqual(kwargs["env"], {"SAFE": "1"})

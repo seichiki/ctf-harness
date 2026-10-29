@@ -35,7 +35,7 @@ codex login                      # 自分の ChatGPT アカウントでサイン
 
 `setup` が書き込むのは、Git の対象外になっている `.local/config.toml` だけです。モデル ID、推論の強度、Daybreak、実行方式、ネットワーク、進行表示、任意の HTTP プロキシ、GPT writeup下書きのオン・オフを保存し、認証情報はコピーしません。古い設定ファイルで新しい項目がなければ安全側の初期値（`network_access = "off"`、`progress = false`、`proxy_url = ""`、`writeup_draft = false`）を使います。設定ファイルが既にある場合は、`config.example.toml` を見て直接編集してください。`setup` は上書きしません。モデル名を保存しても利用権限は得られません。`run` の `--model`、`--effort`、`--daybreak`、`--orchestration`、`--network-access off|on`、`--progress` / `--no-progress`、`--proxy URL` / `--no-proxy`、`--writeup-draft` / `--no-writeup-draft` は、その1回だけ保存値に優先します。
 
-GPT下書きは既定でオフです。使うときは `.local/config.toml` に `writeup_draft = true` を追加するか、明示的な `run` に `--writeup-draft` を付けます。ユーザーが `solved` と `ACCEPT <候補ID>` で公式正解を報告した実行に限り、元の結果を保存した後、別の Codex CLI セッションを1回起動します。下書き役には問題文、確認済み候補、該当役割の記録済みコマンド・終了コード・出力抜粋・テキスト成果物だけを上限付きで渡し、`SOLUTION.md` と先行モデルの構造化レポートの解法説明は渡しません。役割が作成したテキスト成果物にはモデルの主張が含まれる可能性があり、独立に検証された証拠ではありません。子実行は検索・シェルネットワークをオフ、read-only サンドボックス、標準アクセス区分で要求し、既存のモデル ID と effort を使用します。`WRITEUP_DRAFT.md` は検証前の下書き、`writeup/WRITEUP_EVIDENCE.md` は送った証拠の控えです。認証情報のマスクは最善努力なので、共有前に両方を確認してください。下書き失敗・時間切れでも元の `user_confirmed` 結果は保持され、`result.json` の `writeup_draft` に状態を記録します。未確認候補や対話セッションでは生成しません。
+GPT下書きは既定でオフです。使うときは `.local/config.toml` に `writeup_draft = true` を追加するか、明示的な `run` に `--writeup-draft` を付けます。ユーザーが `solved` と `ACCEPT <候補ID>` で公式正解を報告した実行に限り、元の結果を保存した後、別の Codex CLI セッションを1回起動します。下書き役には問題文、確認済み候補、該当役割の記録済みコマンド・終了コード・出力抜粋・テキスト成果物だけを上限付きで渡し、`SOLUTION.md` と先行モデルの構造化レポートの解法説明は渡しません。役割が作成したテキスト成果物にはモデルの主張が含まれる可能性があり、独立に検証された証拠ではありません。子実行は検索・シェルネットワークをオフ、read-only サンドボックスで要求し、writeup役の実効モデル ID・effort・Daybreakを使用します。`WRITEUP_DRAFT.md` は検証前の下書き、`writeup/WRITEUP_EVIDENCE.md` は送った証拠の控えです。認証情報のマスクは最善努力なので、共有前に両方を確認してください。下書き失敗・時間切れでも元の `user_confirmed` 結果は保持され、`result.json` の `writeup_draft` に状態を記録します。未確認候補や対話セッションでは生成しません。
 
 個人設定を保存した後は `./ctf-start` で新しい問題を作成・実行できます。封印済みケースを再実行するには `./ctf-start run --category web --case-id <既存ケースID> --preset test` を使います。自動処理などで表示を抑えるときは明示的な `run` に `--quiet` を付けます。起動時の設定表示と進行表示を止め、最後の JSON は標準出力に残します。通常の明示的実行では要求設定を標準エラーへ短く表示します。プロキシはオン・オフだけを示し、URL は表示しません。実問題に接続する前に dry-run で計画を確認してください。
 
@@ -46,6 +46,27 @@ GPT下書きは既定でオフです。使うときは `.local/config.toml` に 
 
 新規問題ウィザードの外部実行中は、有効な役割レポートから出た候補に `C1` などの ID を付けて表示します。公式画面への提出は自分で行ってください。その**候補全文**が正解だった場合、実行中の同じ端末で `solved` と入力し、候補 ID と全文を確認して `ACCEPT C1` と入力します。役割が終了した時点で候補が1つ以上あり、まだ `solved` していない場合は、終了前に公式提出結果の確認を待ちます。正解なら `solved`、表示された候補をすべて試して不正解なら `wrong`、未確認のまま終了するなら `skip` と入力してください。確認待ちは問題の実行時間制限に含めません。端末入力が閉じた場合は未確認として終了し、Ctrl-C は中止です。モデルの発言やツール出力から自動的に正解扱いにはしません。確認後に `OWNER_CONFIRMATION.json` を保存し、`SOLUTION.md` の生成を試みてから、この実行に属する残りの Codex 子プロセスを停止して、`result.json` に `user_confirmed` と記録します。`wrong` は `owner_review: all_rejected` と `candidate_rejected` を記録します。これは**ユーザーによる公式提出の報告**であり、ハーネスがサーバーで検証した意味ではありません。`SOLUTION.md` は記録されたコマンドの開始・終了と、役割が報告した手法・根拠・再現コマンド・制約を区別してまとめます。存在しない出力や手順は補いません。完全な writeup には元の入力ファイルとイベントログも保存してください。既存ケースの明示的な `run` でも使うなら、対話端末で `--owner-confirmation` を追加します。初期値はオフで、`--quiet` や対話オーケストレーションとは併用できません。
 子プロセスの停止前に `OWNER_CONFIRMATION.json` を原子的に保存します。`SOLUTION.md` の生成だけに失敗した場合も正解報告と元の役割ログが残り、終了処理で再生成を試みます。正解報告自体を保存できなければ、停止も正解扱いもしません。この操作は最前面の端末からのみ受け付け、入力は Codex 子プロセスへ渡しません。
+
+## 役割ごとのモデル設定
+
+Gitの対象外である `.local/config.toml` の末尾に TOML テーブルを追加します。各テーブルの `model`、`effort`、`daybreak` は任意で、省略した項目だけ共通設定を使います。
+
+```toml
+[role_settings.verifier]
+model = "gpt-5.6-sol"
+effort = "high"
+daybreak = "blue"
+
+[role_settings.solver_b]
+model = "YOUR_AVAILABLE_MODEL_ID"
+
+[role_settings.writeup]
+daybreak = "off"
+```
+
+`YOUR_AVAILABLE_MODEL_ID` は自分のアカウントで使用できる実際のIDに置き換えてください。指定できる役割は `solver`（single）、`verifier`・`solver_a`・`solver_b`・`verifier_review`（multi）、`writeup`（下書き）、`interactive`（対話）です。共通の `--model` などの一時指定は未設定の役割にだけ適用され、役割固有の指定を上書きしません。実効要求値は実行前の一覧と `settings.json` / `result.json` の `role_requests`、各役割の `run.json` に記録します。モデル利用権限やサーバー側の適用はこの記録だけでは証明できません。対話の Daybreak Blue は従来どおり画面で選択してください。
+
+`writeup` 役の Daybreak だけは、従来の標準アクセスを維持するため、未指定なら共通設定が `blue` でも `off` です。明示した `[role_settings.writeup] daybreak` は優先されます。
 
 ## 実行方式と切替設定
 

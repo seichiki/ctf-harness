@@ -20,7 +20,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from harness.config import CATEGORIES, ROOT, public_settings
+from harness.config import CATEGORIES, ROOT, active_roles, public_settings, role_choice
 from harness.candidates import (basis as candidate_basis, catalog as candidate_catalog, external_urls,
                                 observed_references, report_urls, write_catalog)
 from harness.locks import category_lock
@@ -224,12 +224,13 @@ def require_exec_capabilities(codex_path: str, daybreak: str,
 
 
 def build_exec_command(config: dict, workdir: Path, schema: Path, web_mode: str,
-                       prompt: str, codex_path: str) -> list[str]:
+                       prompt: str, codex_path: str, role: str = "solver") -> list[str]:
     if web_mode not in ("disabled", "live"):
         raise ValueError("invalid web search mode")
-    daybreak = config["daybreak"] == "blue"
+    choice = role_choice(config, role)
+    daybreak = choice["daybreak"] == "blue"
     return [codex_path, "exec", "--strict-config", "--ignore-user-config", "-C", str(workdir),
-            "-m", config["model"], "-c", f"model_reasoning_effort={config['effort']}",
+            "-m", choice["model"], "-c", f"model_reasoning_effort={choice['effort']}",
             "-c", "approval_policy=on-request", "-c", "features.multi_agent=false",
             "-c", f"web_search={web_mode}", "-c", f"daybreak={'true' if daybreak else 'false'}",
             "-c", f"sandbox_workspace_write.network_access={'true' if config['network_access'] == 'on' else 'false'}",
@@ -243,9 +244,10 @@ def build_exec_command(config: dict, workdir: Path, schema: Path, web_mode: str,
 def build_tui_command(config: dict, workdir: Path, web_mode: str, codex_path: str) -> list[str]:
     if web_mode not in ("disabled", "live"):
         raise ValueError("invalid web search mode")
-    return [codex_path, "--strict-config", "-C", str(workdir), "-m", config["model"],
-            "-c", f"model_reasoning_effort={config['effort']}", "-c", "model_provider=openai",
-            "-c", f"daybreak={'true' if config['daybreak'] == 'blue' else 'false'}",
+    choice = role_choice(config, "interactive")
+    return [codex_path, "--strict-config", "-C", str(workdir), "-m", choice["model"],
+            "-c", f"model_reasoning_effort={choice['effort']}", "-c", "model_provider=openai",
+            "-c", f"daybreak={'true' if choice['daybreak'] == 'blue' else 'false'}",
             "-c", f"web_search={web_mode}",
             "-c", f"sandbox_workspace_write.network_access={'true' if config['network_access'] == 'on' else 'false'}",
             *shell_native_tool_args(),
@@ -394,11 +396,14 @@ def run_agent(role: str, workdir: Path, prompt: str, deadline: float, hashes: di
               schema: Path, web_mode: str, config: dict, codex_path: str,
               progress: ProgressReporter | None = None,
               owner_control: OwnerControl | None = None) -> dict:
-    command = build_exec_command(config, workdir, schema, web_mode, prompt, codex_path)
+    choice = role_choice(config, role)
+    command = build_exec_command(config, workdir, schema, web_mode, prompt, codex_path, role)
     (workdir / "prompt.txt").write_text(prompt + "\n", encoding="utf-8")
     (workdir / "invocation.json").write_text(json.dumps({"argv_without_prompt": redact_proxy_command(command[:-1]),
         "prompt_file": "prompt.txt"}, indent=2) + "\n", encoding="utf-8")
-    record = {"role": role, "started_at": utc_now(), "status": "tool_failure", "returncode": None}
+    record = {"role": role, "started_at": utc_now(), "status": "tool_failure", "returncode": None,
+              "model_requested": choice["model"], "effort_requested": choice["effort"],
+              "daybreak_requested": choice["daybreak"]}
     start = time.monotonic()
     interrupted = False
     with (workdir / "events.jsonl").open("w", encoding="utf-8") as out, (workdir / "stderr.txt").open("w", encoding="utf-8") as err:
@@ -524,7 +529,10 @@ def _run_external(category: str, case_id: str, config: dict, switches: dict,
     if codex_path is None:
         raise ValueError("Codex CLI is missing")
     proxy_isolation = bool(config.get("proxy_url")) or bool(config.get("proxy_override_off"))
-    require_exec_capabilities(codex_path, config["daybreak"], proxy_isolation)
+    role_requests = {role: role_choice(config, role) for role in
+                     active_roles(config["orchestration"], bool(config.get("writeup_draft")))}
+    for program in sorted({choice["daybreak"] for choice in role_requests.values()}):
+        require_exec_capabilities(codex_path, program, proxy_isolation)
     require_chatgpt_login(codex_path, proxy_isolation)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     run_root = category_dir(category) / "runs" / case_id / f"{stamp}-{config['orchestration']}-{uuid.uuid4().hex[:6]}"
@@ -551,7 +559,8 @@ def _run_external(category: str, case_id: str, config: dict, switches: dict,
                                         else "inactive" if config.get("proxy_url") else "not_configured"),
                     "approval_policy_requested": "on-request", "approval_policy_effective": "unverified",
                     "upstream_ctf_skills_revision": SOURCE_REVISION, "auth_mode": "codex_chatgpt_login_status_checked",
-                    "server_daybreak_applied": "unverified", "model_availability": "unverified_before_request"}
+                    "server_daybreak_applied": "unverified", "model_availability": "unverified_before_request",
+                    "role_requests": role_requests}
         (run_root / "settings.json").write_text(json.dumps(settings, indent=2) + "\n", encoding="utf-8")
         schema = run_root / "output-schema.json"
         write_schema(case["input_sha256"], schema)
@@ -771,6 +780,7 @@ def _run_external(category: str, case_id: str, config: dict, switches: dict,
                "solution_file": "SOLUTION.md" if accepted and (run_root / "SOLUTION.md").is_file() else None,
                "source_urls_declared": [render_command(url) for url in urls], "model_requested": config["model"],
                "effort_requested": config["effort"], "daybreak_requested": config["daybreak"],
+               "role_requests": role_requests,
                "daybreak_server_applied": "unverified", "native_subagent_spawn": False,
                "agent_statuses": {name: value["status"] for name, value in results.items()},
                "agent_errors": {name: value["error_type"] for name, value in results.items() if value.get("error_type")},

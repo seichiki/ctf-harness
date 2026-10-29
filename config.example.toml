@@ -8,3 +8,26 @@ network_access = "off" # sandbox outbound network request; set "on" only for an 
 progress = false       # safe terminal status on stderr for external runs
 proxy_url = ""         # optional HTTP proxy endpoint, for example "http://127.0.0.1:8080"
 writeup_draft = false # after owner-confirmed acceptance, ask a separate GPT run for an evidence-based draft
+
+# Optional overrides; omitted fields use the shared values above.
+# Available roles: solver (single), verifier, solver_a, solver_b,
+# verifier_review (multi), writeup (draft), interactive (terminal mode).
+# Exception: writeup Daybreak defaults off unless explicitly set for writeup.
+# Replace model IDs with ones available to your own account.
+# [role_settings.verifier]
+# model = "YOUR_VERIFIER_MODEL_ID"
+# effort = "high"
+# daybreak = "blue"
+# [role_settings.solver_a]
+# model = "YOUR_SOLVER_A_MODEL_ID"
+# [role_settings.solver_b]
+# model = "YOUR_SOLVER_B_MODEL_ID"
+# [role_settings.verifier_review]
+# model = "YOUR_REVIEW_MODEL_ID"
+# [role_settings.solver]
+# model = "YOUR_SINGLE_MODEL_ID"
+# [role_settings.writeup]
+# model = "YOUR_WRITEUP_MODEL_ID"
+# daybreak = "off"
+# [role_settings.interactive]
+# model = "YOUR_INTERACTIVE_MODEL_ID"

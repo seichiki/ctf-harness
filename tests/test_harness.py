@@ -20,6 +20,55 @@ from harness import solved as solved_module
 
 
 class ConfigTests(unittest.TestCase):
+    def test_role_settings_save_load_fallback_and_validation(self):
+        selected = config.validate({"model": "gpt-5.6-sol", "effort": "medium", "daybreak": "off",
+            "role_settings": {"verifier": {"model": "gpt-6-astra", "effort": "high", "daybreak": "blue"},
+                              "solver_b": {"model": "gpt-6-luna"},
+                              "writeup": {"daybreak": "off"}}})
+        self.assertEqual(config.role_choice(selected, "verifier"),
+                         {"model": "gpt-6-astra", "effort": "high", "daybreak": "blue"})
+        self.assertEqual(config.role_choice(selected, "solver_b"),
+                         {"model": "gpt-6-luna", "effort": "medium", "daybreak": "off"})
+        self.assertEqual(config.role_choice(selected, "solver_a")["model"], "gpt-5.6-sol")
+        self.assertEqual(config.role_choice(config.validate({"model": "gpt-5.6-sol", "daybreak": "blue"}),
+                                            "writeup")["daybreak"], "off")
+        self.assertEqual(config.active_roles("multi", True),
+                         ("verifier", "solver_a", "solver_b", "verifier_review", "writeup"))
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "config.toml"
+            config.save(selected, path)
+            self.assertEqual(config.load(path=path), selected)
+            self.assertIn("[role_settings.verifier]", path.read_text(encoding="utf-8"))
+            self.assertNotIn("role_settings = {}", path.read_text(encoding="utf-8"))
+        for roles in ({"invalid_role": {"model": "gpt-6-luna"}},
+                      {"solver_a": {"model": "other/provider"}},
+                      {"solver_a": {"effort": "extreme"}},
+                      {"solver_a": {"daybreak": "red"}},
+                      {"solver_a": {"network_access": "on"}},
+                      {"solver_a": {}}, []):
+            with self.subTest(roles=roles), self.assertRaises(ValueError):
+                config.validate({"model": "gpt-5.6-sol", "role_settings": roles})
+
+    def test_interactive_role_override_reaches_tui_command(self):
+        selected = config.validate({"model": "gpt-5.6-sol", "daybreak": "blue",
+            "role_settings": {"interactive": {"model": "gpt-6-luna", "effort": "low", "daybreak": "off"}}})
+        command = runner.build_tui_command(selected, Path("/tmp/role"), "disabled", "codex")
+        self.assertEqual(command[command.index("-m") + 1], "gpt-6-luna")
+        self.assertIn("model_reasoning_effort=low", command)
+        self.assertIn("daybreak=false", command)
+
+    def test_single_solver_override_reaches_exec_command(self):
+        selected = config.validate({"model": "gpt-5.6-sol", "daybreak": "off",
+            "role_settings": {"solver": {"model": "gpt-6-luna", "effort": "low", "daybreak": "blue"}}})
+        command = runner.build_exec_command(selected, Path("/tmp/role"), Path("/tmp/schema"),
+                                            "disabled", "fixture", "codex", "solver")
+        self.assertEqual(command[command.index("-m") + 1], "gpt-6-luna")
+        self.assertIn("model_reasoning_effort=low", command)
+        self.assertIn("daybreak=true", command)
+        self.assertEqual(command[command.index("--cyber-access-program") + 1], "daybreak_blue")
+
+
+
     def test_writeup_setting_defaults_off_and_accepts_one_run_override(self):
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / "config.toml"
@@ -516,7 +565,7 @@ class RunnerExecutionTests(unittest.TestCase):
         final = io.StringIO()
         with redirect_stderr(output), redirect_stdout(final), \
              patch.object(runner.shutil, "which", return_value="mock-codex"), \
-             patch.object(runner, "require_exec_capabilities"), \
+             patch.object(runner, "require_exec_capabilities") as capabilities, \
              patch.object(runner, "require_chatgpt_login"), \
              patch.object(runner, "require_proxy_available") as proxy_check, \
              patch.object(runner.subprocess, "Popen", FakeProcess), \
@@ -530,6 +579,7 @@ class RunnerExecutionTests(unittest.TestCase):
               if solution_failure else nullcontext()):
             path = runner.run_external("misc", "fixture", self.config, self.switches, None, None,
                                        progress=progress, owner_confirmation=owner_confirmation)
+        self.capability_programs = {call.args[1] for call in capabilities.call_args_list}
         self.progress_output = output.getvalue()
         self.final_output = json.loads(final.getvalue())
         self.process_environments = environments
@@ -548,8 +598,11 @@ class RunnerExecutionTests(unittest.TestCase):
         for role, command, cwd in calls:
             self.assertTrue(cwd.is_relative_to(path))
             self.assertEqual(command[command.index("-C") + 1], str(cwd))
-            self.assertEqual(command[command.index("-m") + 1], "gpt-5.6-sol")
-            self.assertEqual(command[command.index("--cyber-access-program") + 1], "daybreak_blue")
+            selected = config.role_choice(self.config, role)
+            self.assertEqual(command[command.index("-m") + 1], selected["model"])
+            self.assertIn(f"model_reasoning_effort={selected['effort']}", command)
+            self.assertEqual(command[command.index("--cyber-access-program") + 1],
+                             "daybreak_blue" if selected["daybreak"] == "blue" else "standard")
             self.assertIn(f"sandbox_workspace_write.network_access={'true' if self.config['network_access'] == 'on' else 'false'}", command)
             self.assertTrue((path / role / "run.json").is_file())
         return path, summary, [role for role, _, _ in calls]
@@ -564,6 +617,25 @@ class RunnerExecutionTests(unittest.TestCase):
         self.assertFalse(summary["network_access_requested"])
         self.assertEqual(summary["network_access_effective"], "unverified")
         self.assertEqual(self.progress_output, "")
+
+    def test_multi_roles_request_individual_models_and_fallbacks(self):
+        self.config["role_settings"] = {
+            "verifier": {"model": "gpt-6-astra", "effort": "max", "daybreak": "off"},
+            "solver_a": {"model": "gpt-6-luna", "effort": "low"},
+            "verifier_review": {"model": "gpt-6.1-sol"}}
+        path, summary, roles = self.run_mocked()
+        self.assertEqual(len(roles), 4)
+        expected = {"verifier": "gpt-6-astra", "solver_a": "gpt-6-luna",
+                    "solver_b": "gpt-5.6-sol", "verifier_review": "gpt-6.1-sol"}
+        self.assertEqual({role: selected["model"] for role, selected in summary["role_requests"].items()},
+                         expected)
+        self.assertEqual(summary["role_requests"]["verifier"]["daybreak"], "off")
+        self.assertEqual(self.capability_programs, {"blue", "off"})
+        for role, model in expected.items():
+            record = json.loads((path / role / "run.json").read_text(encoding="utf-8"))
+            self.assertEqual(record["model_requested"], model)
+        settings = json.loads((path / "settings.json").read_text(encoding="utf-8"))
+        self.assertEqual(settings["role_requests"], summary["role_requests"])
 
     def test_owner_confirmed_verifier_candidate_stops_before_solvers(self):
         class ConfirmFromTerminal(OwnerControl):
@@ -881,6 +953,7 @@ class RunnerExecutionTests(unittest.TestCase):
             self.assertEqual((plan["network_access"], plan["progress"], plan["proxy_active"]),
                              ("off", False, False))
             self.assertNotIn(endpoint, output.getvalue())
+
             self.assertFalse(plan["writeup_draft"])
             self.assertEqual(path.read_text(encoding="utf-8"), original)
 
@@ -893,6 +966,17 @@ class RunnerExecutionTests(unittest.TestCase):
             self.assertTrue(inherited["proxy_active"])
             self.assertTrue(inherited["writeup_draft"])
             self.assertNotIn(endpoint, output.getvalue())
+
+    def test_cli_dry_run_shows_resolved_role_choices(self):
+        self.config["role_settings"] = {"verifier": {"model": "gpt-6-astra", "effort": "max"}}
+        output = io.StringIO()
+        with patch.object(cli, "load", return_value=dict(self.config)), redirect_stdout(output):
+            self.assertEqual(cli.main(["run", "--category", "misc", "--case-id", "fixture",
+                                       "--dry-run"]), 0)
+        plan = json.loads(output.getvalue())
+        self.assertEqual(plan["role_requests"]["verifier"]["model"], "gpt-6-astra")
+        self.assertEqual(plan["role_requests"]["solver_b"]["model"], "gpt-5.6-sol")
+        self.assertEqual(plan["role_requests"]["verifier"]["effort"], "max")
 
     def test_quiet_suppresses_startup_and_saved_progress_but_keeps_stdout_json(self):
         self.config["progress"] = True

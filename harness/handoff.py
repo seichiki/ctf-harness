@@ -7,6 +7,7 @@ import tempfile
 import threading
 from pathlib import Path
 
+from harness.config import active_roles, role_choice
 from harness.progress import ROLES, render_command, safe_text
 
 
@@ -58,6 +59,12 @@ class Handoff:
                  f"network requested: {render_command(str(self.settings.get('network_access', 'unknown')))}; "
                  f"proxy configured: {bool(self.settings.get('proxy_configured'))}",
                  "- Settings are requests; effective model, network and proxy behavior may differ.", ""]
+        if all(key in self.settings for key in ("model", "effort", "daybreak", "orchestration")):
+            lines.extend(["## Requested models by role", ""])
+            for role in active_roles(self.settings["orchestration"], bool(self.settings.get("writeup_draft"))):
+                choice = role_choice(self.settings, role)
+                lines.append(f"- {role}: {choice['model']} / {choice['effort']} / {choice['daybreak']}")
+            lines.append("")
         if self.error_type:
             lines.extend([f"- Runner error type: {self.error_type}", ""])
         lines.extend(["## Actions and observed progress", "",
