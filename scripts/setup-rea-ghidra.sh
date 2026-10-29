@@ -58,7 +58,7 @@ fetch_verified 'https://github.com/NationalSecurityAgency/ghidra/releases/downlo
     'ghidra_12.1.4_PUBLIC_20260921.zip'
 if [ ! -e "$ghidra" ]; then
     stage="$tool_root/.ghidra-extract"
-    uv run --project "$project" --offline --locked --no-sync python \
+    uv run --no-project --offline --python 3.12 python \
         "$project/scripts/extract-verified-ghidra.py" \
         "$downloads/ghidra_12.1.4_PUBLIC_20260921.zip" "$stage"
     mv "$stage/ghidra_12.1.4_PUBLIC" "$ghidra"

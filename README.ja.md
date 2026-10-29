@@ -114,3 +114,9 @@ Reverse の問題では、プロジェクト内の `rea-static` を REA/Ghidra �
 Ubuntu 26.04 x86-64 WSL の Pwn・Forensics 用外部ツールは `./scripts/setup-native-tools.sh` でクローン内に導入できます。`./ctf-start tools --missing-only --json` で版を確認し、`uv run --offline --locked --no-sync python scripts/native_smoke.py` でローカル試料を確認します。対象は GDB、socat、ExifTool、TShark、Binwalk 3、7-Zip、unzip です。sudo やグローバル PATH の変更はありません。[機能と制限](docs/NATIVE-TOOLS.md) を参照してください。
 
 `./ctf-start tools` は現在の導入・版・プロバイダー診断だけを表示します。保存済みの REA/Codex 過去テストは通常表示・`--missing-only`・JSON のどれにも出しません。`available` は将来の子サンドボックス動作まで保証しません。
+
+`./ctf-start tools` の人向け表示は、ツール名・版・カテゴリ・状態を短く並べ、共通ツールは1行にまとめます。カテゴリ略号は WEB=web、CRY=crypto、PWN=pwn、REV=reverse、FOR=forensics、OSI=osint、MSC=misc、ALL=全カテゴリです。幅の狭い端末では省略せず複数行に折り返します。`--missing-only` は現在の不足・非互換・設定不備だけを表示します。`--json` は従来どおり正式名、正式カテゴリ、パス、カテゴリ別の項目を保持します。
+
+`tools` の人向け表示には日本語を含めません。先頭に `Required / Optional` を表示し、対話端末で色が使える場合は `Required` のみ緑です。見出しは `TOOL`、`VERSION`、`CATEGORIES`、`STATUS` です。必須ツールの行は緑、利用可の `✓` は緑、利用不可の必須ツールの `✕` は赤、利用不可の任意ツールは無色の `-` です。`NO_COLOR`、`TERM=dumb`、リダイレクト、JSON には ANSI 色を入れません。正確な状態や必須・任意の値は `--json` を参照してください。
+
+選択式の導入画面、一括導入、計画の確認、進捗ログについては[ツール導入ガイド](docs/INSTALL-TOOLS.ja.md)を参照してください。

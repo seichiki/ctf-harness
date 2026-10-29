@@ -184,6 +184,9 @@ def menu() -> list[str]:
 
 def main(argv: list[str] | None = None) -> int:
     args_list = sys.argv[1:] if argv is None else argv
+    if args_list[:2] == ["tools", "install"]:
+        from harness import toolinstall
+        return toolinstall.main(args_list[2:])
     if not args_list:
         from harness.wizard import run_wizard
         return run_wizard(interactive_runner=run_interactive)
@@ -198,7 +201,12 @@ def main(argv: list[str] | None = None) -> int:
     setup.add_argument("--progress", action="store_true")
     setup.add_argument("--proxy", dest="proxy_url", default="")
     sub.add_parser("doctor", help="check local CLI/uv/source presence without model requests")
-    tools = sub.add_parser("tools", help="read-only category tool inventory; never installs software")
+    tools = sub.add_parser(
+        "tools", help="category tool inventory; tools install opens the installer",
+        epilog="Display labels: WEB=web, CRY=crypto, PWN=pwn, REV=reverse, "
+               "FOR=forensics, OSI=osint, MSC=misc, ALL=all categories. "
+               "CLI --category and JSON keep canonical names. "
+               "Run 'ctf-start tools install [--all|--required]' to install missing tools.")
     tools.add_argument("--category", choices=CATEGORIES)
     tools.add_argument("--missing-only", action="store_true")
     tools.add_argument("--json", action="store_true")

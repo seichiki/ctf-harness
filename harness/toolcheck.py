@@ -10,6 +10,7 @@ import re
 import shutil
 import subprocess
 import sys
+import unicodedata
 from pathlib import Path
 
 from harness.config import CATEGORIES, ROOT
@@ -188,11 +189,175 @@ def collect(category: str | None = None, missing_only: bool = False) -> list[dic
         items.extend(_binary_item(current, *spec) for spec in BINARIES.get(current, ()))
     if "reverse" in categories:
         items.extend(_local_native_items())
-    return [item for item in items if item["status"] != "available"] if missing_only else items
+    problems = {"missing", "misconfigured", "incompatible"}
+    return [item for item in items if item["status"] in problems] if missing_only else items
+
+
+DISPLAY_NAMES = {
+    ("python", "beautifulsoup4"): "Beautiful Soup",
+    ("python", "z3-solver"): "Z3",
+    ("integration", "REA/Ghidra provider"): "REA/Ghidra",
+    ("integration", "rea-static role interface"): "rea-static",
+}
+CATEGORY_TAGS = {"web": "WEB", "crypto": "CRY", "pwn": "PWN", "reverse": "REV",
+                 "forensics": "FOR", "osint": "OSI", "misc": "MSC"}
+GREEN = "\x1b[32m"
+RED = "\x1b[31m"
+RESET = "\x1b[0m"
+
+
+def _usage_categories(item: dict) -> tuple[str, ...]:
+    """Actual declared use, including categories outside a current filter."""
+    category = item["category"]
+    if category == "all":
+        return tuple(CATEGORIES)
+    kind, name = item["kind"], item["name"]
+    if kind == "binary":
+        uses = [current for current in CATEGORIES
+                if any(spec[0] == name for spec in BINARIES.get(current, ()))]
+    elif kind == "python":
+        uses = [current for current in CATEGORIES
+                if any(spec[0] == name for spec in PYTHON[current])]
+    else:
+        uses = []
+    return tuple(uses) if uses else (category,)
+
+
+def _cell_width(value: str) -> int:
+    return sum(0 if unicodedata.combining(char) else
+               2 if unicodedata.east_asian_width(char) in ("F", "W") else 1
+               for char in value)
+
+
+def _clean_cell(value: str) -> str:
+    return "".join(char if unicodedata.category(char)[0] != "C" else "?" for char in value)
+
+
+def _wrap_cell(value: str, width: int) -> list[str]:
+    lines, current, used = [], "", 0
+    for char in value:
+        size = _cell_width(char)
+        if current and used + size > width:
+            lines.append(current)
+            current, used = "", 0
+        current += char
+        used += size
+    return lines + [current]
+
+
+def _version_label(item: dict) -> str:
+    if item["status"] == "missing":
+        return "-"
+    raw = item.get("version")
+    if not raw:
+        return "UNKNOWN"
+    raw = _clean_cell(str(raw))
+    matches = re.findall(r"\d+(?:\.\d+)+(?:[-+][A-Za-z0-9.]+)?", raw)
+    if item["name"] == "gdb" and matches:
+        return matches[-1]
+    if item["name"] in ("REA/Ghidra provider", "rea-static role interface") and len(matches) >= 2:
+        return " / ".join(matches[:2])
+    return matches[0] if matches else raw
+
+
+def _human_rows(items: list[dict]) -> list[tuple[str, str, str, str, bool]]:
+    groups: dict[tuple[str, str], dict] = {}
+    for item in items:
+        key = (item["kind"], item["name"])
+        if key not in groups:
+            groups[key] = {"item": item, "statuses": set(), "required": False, "categories": set()}
+        group = groups[key]
+        group["statuses"].add(item["status"])
+        group["required"] |= item["required"]
+        group["categories"].update(_usage_categories(item))
+    labels = {key: DISPLAY_NAMES.get(key, key[1]) for key in groups}
+    for key, label in tuple(labels.items()):
+        if sum(other == label for other in labels.values()) > 1:
+            labels[key] = f"{label} ({key[1]})"
+    rows = []
+    for key, group in groups.items():
+        item = group["item"]
+        status = (next(iter(group["statuses"])) if len(group["statuses"]) == 1
+                  else "mixed")
+        version = _version_label(item) if status != "mixed" else "UNKNOWN"
+        categories = ("ALL" if group["categories"] == set(CATEGORIES) else
+                      ", ".join(CATEGORY_TAGS[current] for current in CATEGORIES
+                                if current in group["categories"]))
+        state = "✓" if status == "available" else "✕" if group["required"] else "-"
+        rows.append((_clean_cell(labels[key]), version, categories, state, group["required"]))
+    return rows
+
+
+def _supports_color() -> bool:
+    if not sys.stdout.isatty() or "NO_COLOR" in os.environ or os.environ.get("CLICOLOR") == "0":
+        return False
+    term = os.environ.get("TERM", "").lower()
+    if term in ("", "dumb"):
+        return False
+    return (term.startswith(("xterm", "screen", "tmux", "linux", "rxvt", "alacritty", "wezterm", "foot", "konsole"))
+            or term == "ansi" or bool(os.environ.get("COLORTERM")))
+
+
+def _paint(value: str, *, required: bool = False, status: bool = False, color: bool = False) -> str:
+    if not color:
+        return value
+    if status:
+        glyph = value.rstrip(" ")
+        shade = GREEN if glyph == "✓" else RED if glyph == "✕" else ""
+        return f"{shade}{glyph}{RESET}{value[len(glyph):]}" if shade else value
+    return f"{GREEN}{value}{RESET}" if required else value
+
+
+def render_human(items: list[dict], *, width: int | None = None, missing_only: bool = False,
+                 color: bool = False) -> str:
+    """Compact Unicode-safe display; JSON remains the canonical per-category inventory."""
+    if not items:
+        return "No missing tools." if missing_only else "No tools for this selection."
+    rows = _human_rows(items)
+    legend = _paint("Required", required=True, color=color) + " / Optional"
+    headers = ("TOOL", "VERSION", "CATEGORIES", "STATUS")
+    limits = (24, 20, 24, 16)
+    widths = [min(limit, max(_cell_width(header), *(_cell_width(row[index]) for row in rows)))
+              for index, (header, limit) in enumerate(zip(headers, limits))]
+    terminal_width = width if width is not None else shutil.get_terminal_size((100, 24)).columns
+    if sum(widths) + 6 > terminal_width:
+        lines = ([legend] if _cell_width("Required / Optional") <= terminal_width else
+                 [_paint("Required", required=True, color=color), "/ Optional"])
+        for row in rows:
+            if len(lines) > 1:
+                lines.append("")
+            for index, (label, value) in enumerate(zip(headers, row[:4])):
+                prefix = f"{label}: "
+                indent = " " * _cell_width(prefix)
+                chunks = _wrap_cell(value, max(1, terminal_width - _cell_width(prefix)))
+                if index == 3:
+                    lines.append(_paint(prefix, required=row[4], color=color) +
+                                 _paint(chunks[0], status=True, color=color))
+                    lines.extend(indent + _paint(chunk, status=True, color=color) for chunk in chunks[1:])
+                else:
+                    lines.append(_paint(prefix + chunks[0], required=row[4], color=color))
+                    lines.extend(_paint(indent + chunk, required=row[4], color=color) for chunk in chunks[1:])
+        return "\n".join(lines)
+
+    def pad(value: str, size: int) -> str:
+        return value + " " * (size - _cell_width(value))
+
+    lines = [legend, "  ".join(pad(header, size) for header, size in zip(headers, widths)),
+             "  ".join("-" * size for size in widths)]
+    for row in rows:
+        cells = [_wrap_cell(value, size) for value, size in zip(row[:4], widths)]
+        for line_number in range(max(map(len, cells))):
+            values = [pad(cell[line_number] if line_number < len(cell) else "", size)
+                      for cell, size in zip(cells, widths)]
+            lines.append("  ".join(_paint(value, required=row[4], status=index == 3, color=color)
+                                   for index, value in enumerate(values)))
+    return "\n".join(lines)
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Read-only category tool inventory; never installs software")
+    parser = argparse.ArgumentParser(
+        description="Read-only category tool inventory; never installs software",
+        epilog="Category labels: WEB=web, CRY=crypto, PWN=pwn, REV=reverse, FOR=forensics, OSI=osint, MSC=misc, ALL=all.")
     parser.add_argument("--category", choices=CATEGORIES)
     parser.add_argument("--missing-only", action="store_true")
     parser.add_argument("--json", action="store_true")
@@ -201,12 +366,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.json:
         print(json.dumps({"python": sys.executable, "tools": items}, indent=2, ensure_ascii=False))
     else:
-        for item in items:
-            print(f"{item['category']:10} {item['status']:13} {'required' if item['required'] else 'optional':8} "
-                  f"{item['name']:24} {item['version'] or '-':18} {item['path'] or '-'}")
-        if not items:
-            print("No missing tools found." if args.missing_only else "No tools found for this selection.")
-        print("Read-only check; no tools were installed or changed. Use --json for guidance.")
+        print(render_human(items, missing_only=args.missing_only, color=_supports_color()))
+        print("Read-only check; no tools or settings were changed. Use --json for details.")
     return 0
 
 
