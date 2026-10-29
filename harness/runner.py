@@ -662,9 +662,23 @@ def _run_external(category: str, case_id: str, config: dict, switches: dict,
         forced_status = "tool_failure"
         run_error_type = type(exc).__name__
 
+    owner_review = "not_requested"
     if owner_control is not None:
-        owner_control.close()
-        owner_control.ensure_solution()
+        try:
+            if forced_status != "cancelled":
+                owner_review = owner_control.wait_for_final_review()
+        except KeyboardInterrupt:
+            owner_control.cancelled.set()
+            owner_review = "cancelled"
+            forced_status = "cancelled"
+            run_error_type = "KeyboardInterrupt"
+        except Exception as exc:
+            owner_review = "error"
+            forced_status = "tool_failure"
+            run_error_type = type(exc).__name__
+        finally:
+            owner_control.close()
+            owner_control.ensure_solution()
 
     # An interrupt can arrive before a completed role is added to results.
     for role in (("solver",) if config["orchestration"] == "single" else
@@ -697,6 +711,8 @@ def _run_external(category: str, case_id: str, config: dict, switches: dict,
         candidate, status = accepted["candidate"], "user_confirmed"
     elif forced_status:
         status = forced_status
+    elif owner_review == "all_rejected" and not failures and len(results) == expected_count:
+        status = "candidate_rejected"
     elif failures:
         status = failures[0]
     elif len(results) != expected_count:
@@ -738,6 +754,7 @@ def _run_external(category: str, case_id: str, config: dict, switches: dict,
                "proxy_http_observations": http_diagnostics,
                "progress_requested": progress,
                "owner_confirmation_requested": owner_confirmation,
+               "owner_review": owner_review,
                "approval_policy_requested": "on-request", "approval_policy_effective": "unverified",
                "candidate_file": "candidate.txt" if candidate_hash else None,
                "candidate_sha256": candidate_hash, "provenance_class": provenance,
@@ -768,6 +785,10 @@ def _run_external(category: str, case_id: str, config: dict, switches: dict,
                 handoff.event("run", "Owner reported official acceptance; see OWNER_CONFIRMATION.json" +
                               (" and SOLUTION.md" if (run_root / "SOLUTION.md").is_file() else
                                " (writeup unavailable)"))
+            elif owner_review == "all_rejected":
+                handoff.event("run", "Owner reported every displayed candidate rejected by official submission; not verified by harness")
+            elif owner_review in ("skipped", "input_ended"):
+                handoff.event("run", "Candidate review ended without an owner correctness report")
             handoff.finish(status, run_error_type)
         except Exception:
             pass

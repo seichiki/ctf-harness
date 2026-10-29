@@ -109,6 +109,48 @@ class OwnerControlTests(unittest.TestCase):
         self.assertIn("選択した候補全文", text)
         self.assertIn("academy{TOKEN=ctf-flag}", text)
 
+    def test_final_review_waits_for_owner_verdict(self):
+        for command, expected in ((b"wrong\n", "all_rejected"), (b"skip\n", "skipped"),
+                                  (b"solved\nC1\nACCEPT C1\n", "confirmed")):
+            with self.subTest(command=command):
+                read_fd, write_fd = os.pipe()
+                try:
+                    with os.fdopen(read_fd, "rb", buffering=0) as source:
+                        control = OwnerControl(self.root, self.control.case, stream=io.StringIO(),
+                                               input_stream=source)
+                        control.record_candidate("verifier", self.record)
+                        control.start()
+                        outcome = []
+                        waiter = threading.Thread(target=lambda: outcome.append(control.wait_for_final_review()))
+                        waiter.start()
+                        self.assertTrue(control.final_review.wait(2))
+                        self.assertTrue(waiter.is_alive())
+                        os.write(write_fd, command)
+                        waiter.join(timeout=2)
+                        self.assertFalse(waiter.is_alive())
+                        self.assertEqual(outcome, [expected])
+                        self.assertEqual(control.confirmed.is_set(), expected == "confirmed")
+                        control.close()
+                finally:
+                    os.close(write_fd)
+
+    def test_final_review_without_candidate_or_after_eof_does_not_hang(self):
+        self.assertEqual(self.control.wait_for_final_review(), "not_requested")
+        read_fd, write_fd = os.pipe()
+        try:
+            with os.fdopen(read_fd, "rb", buffering=0) as source:
+                control = OwnerControl(self.root, self.control.case, stream=io.StringIO(),
+                                       input_stream=source)
+                control.record_candidate("verifier", self.record)
+                control.start()
+                os.close(write_fd)
+                write_fd = -1
+                self.assertEqual(control.wait_for_final_review(), "input_ended")
+                control.close()
+        finally:
+            if write_fd >= 0:
+                os.close(write_fd)
+
     def test_pasted_multiple_terminal_lines_are_consumed_in_order(self):
         read_fd, write_fd = os.pipe()
         try:

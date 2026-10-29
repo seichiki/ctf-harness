@@ -69,6 +69,9 @@ class OwnerControl:
         self.closed = threading.Event()
         self.confirmed = threading.Event()
         self.cancelled = threading.Event()
+        self.final_review = threading.Event()
+        self.review_done = threading.Event()
+        self.review_outcome: str | None = None
         self.accepted: dict | None = None
         self.solution_error = False
         self.candidates: dict[str, dict] = {}
@@ -214,7 +217,25 @@ class OwnerControl:
             self.accepted = accepted
             self.ensure_solution()
             self.confirmed.set()
+            self.review_outcome = "confirmed"
+            self.review_done.set()
             return True
+
+    def wait_for_final_review(self) -> str:
+        """Keep the owner terminal open after roles finish if candidates were shown."""
+        if self.confirmed.is_set():
+            return "confirmed"
+        if self.cancelled.is_set() or not self.list_candidates():
+            return "not_requested"
+        if not self.review_done.is_set():
+            self.final_review.set()
+            self._say("候補の公式提出結果を確認します。正解なら solved、すべて不正解なら wrong、未確認なら skip と入力してください。")
+            while not self.review_done.wait(0.25):
+                if self.cancelled.is_set() or self.closed.is_set():
+                    break
+                if self.thread is not None and not self.thread.is_alive():
+                    break
+        return self.review_outcome or ("cancelled" if self.cancelled.is_set() else "input_ended")
 
     def ensure_solution(self) -> None:
         with self.lock:
@@ -256,7 +277,13 @@ class OwnerControl:
             command = self._readline()
             if command is None:
                 if not (self.closed.is_set() or self.cancelled.is_set() or self.confirmed.is_set()):
-                    self._say("端末入力が終了しました。早期終了の受付は使えませんが、実行は続きます。")
+                    self._say("端末入力が終了しました。候補の確認は記録しません。")
+                break
+            if self.final_review.is_set() and command.strip() in ("wrong", "skip"):
+                self.review_outcome = "all_rejected" if command.strip() == "wrong" else "skipped"
+                self._say("全候補を不正解として記録します。" if command.strip() == "wrong" else
+                          "候補は未確認のまま終了します。")
+                self.review_done.set()
                 break
             if command.strip() != "solved":
                 continue
@@ -292,6 +319,7 @@ class OwnerControl:
                     self._say("解法ファイルは作成できませんでした。OWNER_CONFIRMATION.json と役割ログを保存してください。")
             else:
                 self._say("正解確認は記録していません。実行を続けます。")
+        self.review_done.set()
 
     def start(self) -> None:
         self.thread = threading.Thread(target=self._loop, daemon=True)
@@ -299,6 +327,7 @@ class OwnerControl:
 
     def close(self) -> None:
         self.closed.set()
+        self.review_done.set()
         if self.thread is not None:
             self.thread.join(timeout=1)
         # Fence an acceptance that entered confirm() just before close().

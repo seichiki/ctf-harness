@@ -576,6 +576,73 @@ class RunnerExecutionTests(unittest.TestCase):
         self.assertIn("Owner-reported official acceptance", (path / "SOLUTION.md").read_text(encoding="utf-8"))
         self.assertIn("SOLUTION.md", (path / "HANDOFF.md").read_text(encoding="utf-8"))
 
+    def test_final_candidate_review_can_confirm_after_all_roles_finish(self):
+        class FinalReview(OwnerControl):
+            def start(self):
+                pass
+
+            def wait_for_final_review(self):
+                assert len(self.list_candidates()[0][2]) == 4
+                self.confirm("C1", "ACCEPT C1")
+                return "confirmed"
+
+        path, summary, roles = self.run_mocked(owner_confirmation=True, owner_class=FinalReview)
+        self.assertEqual(len(roles), 4)
+        self.assertEqual(summary["owner_review"], "confirmed")
+        self.assertEqual(summary["status"], "user_confirmed")
+        self.assertTrue((path / "OWNER_CONFIRMATION.json").is_file())
+        self.assertEqual(set(summary["owner_confirmation"]["roles"]),
+                         {"verifier", "solver_a", "solver_b", "verifier_review"})
+
+    def test_final_review_rejection_preserves_candidates(self):
+        class FinalReview(OwnerControl):
+            def start(self):
+                pass
+
+            def wait_for_final_review(self):
+                assert self.list_candidates()
+                return "all_rejected"
+
+        path, summary, roles = self.run_mocked(owner_confirmation=True, owner_class=FinalReview)
+        self.assertEqual(len(roles), 4)
+        self.assertEqual(summary["owner_review"], "all_rejected")
+        self.assertEqual(summary["status"], "candidate_rejected")
+        self.assertFalse((path / "OWNER_CONFIRMATION.json").exists())
+        self.assertTrue((path / "candidates.json").is_file())
+        self.assertIn("Owner reported every displayed candidate rejected",
+                      (path / "HANDOFF.md").read_text(encoding="utf-8"))
+
+    def test_final_review_error_still_saves_role_results(self):
+        class BrokenReview(OwnerControl):
+            def start(self):
+                pass
+
+            def wait_for_final_review(self):
+                raise OSError("private-input-must-not-appear")
+
+        path, summary, roles = self.run_mocked(owner_confirmation=True, owner_class=BrokenReview)
+        self.assertEqual(len(roles), 4)
+        self.assertEqual(summary["status"], "tool_failure")
+        self.assertEqual(summary["owner_review"], "error")
+        self.assertEqual(summary["run_error_type"], "OSError")
+        self.assertTrue((path / "candidates.json").is_file())
+        self.assertNotIn("private-input-must-not-appear", (path / "result.json").read_text())
+
+    def test_partial_run_still_reviews_displayed_candidate(self):
+        class FinalReview(OwnerControl):
+            def start(self):
+                pass
+
+            def wait_for_final_review(self):
+                assert self.list_candidates()
+                return "skipped"
+
+        _, summary, _ = self.run_mocked(scenarios={"solver_a": "failure"},
+                                        owner_confirmation=True, owner_class=FinalReview)
+        self.assertEqual(summary["owner_review"], "skipped")
+        self.assertNotEqual(summary["status"], "user_confirmed")
+        self.assertGreaterEqual(summary["candidate_count"], 1)
+
     def test_owner_confirmation_survives_optional_handoff_write_failure(self):
         class ConfirmFromTerminal(OwnerControl):
             def start(self):
