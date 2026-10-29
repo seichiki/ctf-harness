@@ -57,11 +57,14 @@ class WizardTests(unittest.TestCase):
         with patch.object(wizard, "run_wizard", return_value=17) as target:
             self.assertEqual(cli.main([]), 17)
         target.assert_called_once()
+        with patch.object(wizard, "run_wizard", return_value=17) as target:
+            self.assertEqual(cli.main(["--yes"]), 17)
+        self.assertTrue(target.call_args.kwargs["auto_yes"])
         self.assertEqual(wizard.run_wizard(root=self.root, tty=False), 2)
 
     def test_new_local_case_scaffold_files_statement_and_footer(self):
         answers = ["7", "日本語 問題", "", "Read this local puzzle.", "/end",
-                   "1", "", "1", "RUN"]
+                   "1", "", "1", "y"]
         result, out, _ = self.wizard(answers)
         self.assertEqual(result, 0)
         self.assertEqual(len(self.calls), 1)
@@ -83,6 +86,25 @@ class WizardTests(unittest.TestCase):
         self.assertIn("引継ぎファイル：", out)
         self.assertIn("ログ保存先：", out)
 
+    def test_wizard_yes_skips_only_final_operational_prompt(self):
+        replies = iter(["7", "Fixture", "", "Statement", "/end", "1", "", "1"])
+        with redirect_stdout(io.StringIO()):
+            result = wizard.run_wizard(root=self.root, tty=True,
+                                       input_fn=lambda _: next(replies), auto_yes=True,
+                                       external_runner=self.fake_run)
+        self.assertEqual(result, 0)
+        self.assertEqual(len(self.calls), 1)
+
+    def test_wizard_yes_does_not_enable_network_without_explicit_choice(self):
+        replies = iter(["1", "Fixture", "", "Statement", "/end", "2",
+                        "http://example.test:1234/", "3", "1", "/cancel"])
+        with redirect_stdout(io.StringIO()):
+            result = wizard.run_wizard(root=self.root, tty=True,
+                                       input_fn=lambda _: next(replies), auto_yes=True,
+                                       external_runner=self.fake_run)
+        self.assertEqual(result, 0)
+        self.assertEqual(self.calls, [])
+
     def test_cancellation_after_scaffold_leaves_draft_without_run(self):
         result, out, _ = self.wizard(["7", "Fixture", "/cancel"])
         self.assertEqual(result, 0)
@@ -94,8 +116,34 @@ class WizardTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "draft"):
             runner.seal_case("misc", cases[0].name)
 
+    def test_eof_at_final_prompt_keeps_draft_and_never_runs(self):
+        replies = iter(["7", "Fixture", "", "Statement", "/end", "1", "", "1"])
+        def read(_):
+            try:
+                return next(replies)
+            except StopIteration:
+                raise EOFError
+        with redirect_stdout(io.StringIO()):
+            result = wizard.run_wizard(root=self.root, tty=True, input_fn=read,
+                                       external_runner=self.fake_run)
+        self.assertEqual(result, 0)
+        self.assertEqual(self.calls, [])
+        case = next((self.root / "categories/misc/cases").iterdir())
+        self.assertTrue(json.loads((case / "case.json").read_text())["draft"])
+
+    def test_back_and_cancel_remain_available_at_final_prompt(self):
+        result, _, _ = self.wizard(["7", "Fixture", "", "Statement", "/end",
+                                    "1", "", "1", "/back", "y"])
+        self.assertEqual(result, 0)
+        self.assertEqual(len(self.calls), 1)
+        self.calls.clear()
+        result, _, _ = self.wizard(["7", "Second", "", "Statement", "/end",
+                                    "1", "", "1", "/cancel"])
+        self.assertEqual(result, 0)
+        self.assertEqual(self.calls, [])
+
     def test_placed_files_are_listed_and_symlinks_rejected(self):
-        answers = iter(["7", "Fixture", "", "Statement", "/end", "1", "", "1", "RUN"])
+        answers = iter(["7", "Fixture", "", "Statement", "/end", "1", "", "1", "y"])
         def enter(prompt):
             value = next(answers)
             if prompt == "" and value == "":
@@ -115,7 +163,7 @@ class WizardTests(unittest.TestCase):
 
     def test_live_network_off_requires_explicit_one_run_enable(self):
         answers = ["1", "Web fixture", "", "Question", "/end", "2",
-                   "http://example.test:1234/", "3", "2", "ENABLE", "RUN"]
+                   "http://example.test:1234/", "3", "2", "ENABLE", "y"]
         result, out, _ = self.wizard(answers)
         self.assertEqual(result, 0)
         self.assertEqual(self.calls[0][2]["network_access"], "on")
@@ -125,7 +173,7 @@ class WizardTests(unittest.TestCase):
 
     def test_invalid_statement_and_no_run_confirmation(self):
         result, out, _ = self.wizard(["7", "Fixture", "", "TODO", "/end",
-                                      "Actual statement", "/end", "1", "1", "1", "stop"])
+                                      "Actual statement", "/end", "1", "1", "1", "n"])
         self.assertEqual(result, 0)
         self.assertEqual(self.calls, [])
         self.assertIn("空欄や仮の問題文", out)
@@ -138,7 +186,7 @@ class WizardTests(unittest.TestCase):
             (run / "HANDOFF.md").write_text("# saved", encoding="utf-8")
             raise OSError("mock failure")
         result, out, _ = self.wizard(["7", "Fixture", "", "Statement", "/end",
-                                      "1", "1", "1", "RUN"], fake=broken)
+                                      "1", "1", "1", "y"], fake=broken)
         self.assertEqual(result, 2)
         self.assertIn("引継ぎファイル：", out)
         self.assertIn("ログ保存先：", out)
@@ -152,7 +200,7 @@ class WizardTests(unittest.TestCase):
             (run / "candidate.txt").write_text("fixture-flag\n", encoding="utf-8")
             return run
         result, out, _ = self.wizard(["7", "Fixture", "", "Statement", "/end",
-                                      "1", "1", "1", "RUN"], fake=solved)
+                                      "1", "1", "1", "y"], fake=solved)
         self.assertEqual(result, 0)
         self.assertIn("解法ファイル：", out)
         self.assertIn("正解報告：", out)
@@ -166,7 +214,7 @@ class WizardTests(unittest.TestCase):
             (run / "HANDOFF.md").write_text("# saved", encoding="utf-8")
             raise KeyboardInterrupt
         result, out, err = self.wizard(["7", "Fixture", "", "Statement", "/end",
-                                        "1", "1", "1", "RUN"], fake=interrupted)
+                                        "1", "1", "1", "y"], fake=interrupted)
         self.assertEqual(result, 130)
         self.assertIn("引継ぎファイル：", out)
         self.assertIn("ログ保存先：", out)

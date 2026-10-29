@@ -12,9 +12,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from harness.archive import archive_categories, list_archives, restore_archive
+from harness.confirm import ConfirmationCancelled, ask
 from harness.config import DAYBREAK, EFFORTS, NETWORK_ACCESS, ORCHESTRATION, ROOT, load, public_settings, save, validate
 from harness.locks import category_lock
 from harness.handoff import Handoff
+from harness.progress import render_command
 from harness.runner import (
     CATEGORIES, SOURCE_REVISION, build_tui_command, case_dir, category_dir,
     choose_switches, common_prompt, init_case, load_case, prepare_role,
@@ -22,6 +24,11 @@ from harness.runner import (
     require_proxy_available, seal_case, utc_now,
     require_rea_available,
 )
+
+
+def _safe_plan_value(value: object) -> str:
+    return render_command(str(value)).replace(
+        "… [truncated; full command in events.jsonl]", "… [truncated; see case.json]")
 
 
 def doctor() -> dict:
@@ -131,13 +138,13 @@ def menu() -> list[str]:
     if action == "archive":
         scope = input("Category name or all: ").strip().lower()
         args = ["archive", "--all-categories"] if scope == "all" else ["archive", "--category", scope]
-        if input("Type ARCHIVE to move case and run data (Enter previews): ").strip() == "ARCHIVE":
+        if ask("Archive the selected case and run data"):
             args.append("--confirm")
         return args
     if action == "restore":
         archive_id = input("Archive ID: ").strip()
         args = ["restore", "--archive-id", archive_id]
-        if input("Type RESTORE to move archived data back (Enter previews): ").strip() == "RESTORE":
+        if ask("Restore the selected archive"):
             args.append("--confirm")
         return args
     if action == "setup":
@@ -177,20 +184,25 @@ def menu() -> list[str]:
         args += ["--answer-reference", answer]
         if answer == "on":
             args += ["--answer-file", input("Explicit answer file path: ").strip()]
-        if (input("Dry-run only? [Y/n]: ").strip().lower() or "y") != "n":
+        if ask("Dry-run only"):
             args.append("--dry-run")
     return args
 
 
 def main(argv: list[str] | None = None) -> int:
     args_list = sys.argv[1:] if argv is None else argv
+    leading_yes = bool(args_list and args_list[0] in ("-y", "--yes"))
+    if leading_yes:
+        args_list = args_list[1:]
     if args_list[:2] == ["tools", "install"]:
         from harness import toolinstall
-        return toolinstall.main(args_list[2:])
+        return toolinstall.main([*args_list[2:], *(["--yes"] if leading_yes else [])])
     if not args_list:
         from harness.wizard import run_wizard
-        return run_wizard(interactive_runner=run_interactive)
+        return run_wizard(interactive_runner=run_interactive, auto_yes=leading_yes)
     parser = argparse.ArgumentParser(prog="ctf-start", description="Account-configured CTF harness")
+    parser.add_argument("-y", "--yes", action="store_true", default=leading_yes,
+                        help="accept ordinary operation confirmations; never confirms a CTF answer or security permission")
     sub = parser.add_subparsers(dest="action")
     setup = sub.add_parser("setup", help="save private local model choices; does not manage authentication")
     setup.add_argument("--model", required=True)
@@ -218,12 +230,14 @@ def main(argv: list[str] | None = None) -> int:
     mode = archive.add_mutually_exclusive_group()
     mode.add_argument("--dry-run", action="store_true", help="preview only (default)")
     mode.add_argument("--confirm", action="store_true", help="execute the previewed archive move")
+    archive.add_argument("-y", "--yes", action="store_true", default=argparse.SUPPRESS)
     sub.add_parser("archives", help="list archived and incomplete archive folders")
     restore = sub.add_parser("restore", help="preview or restore an archive into empty active paths")
     restore.add_argument("--archive-id", required=True)
     restore_mode = restore.add_mutually_exclusive_group()
     restore_mode.add_argument("--dry-run", action="store_true", help="preview only (default)")
     restore_mode.add_argument("--confirm", action="store_true", help="restore if active paths are empty")
+    restore.add_argument("-y", "--yes", action="store_true", default=argparse.SUPPRESS)
     init = sub.add_parser("init", help="create empty case input directory")
     init.add_argument("--category", choices=CATEGORIES, required=True)
     init.add_argument("--case-id", required=True)
@@ -257,6 +271,8 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--answer-reference", choices=("auto", "on", "off"), default="auto")
     run.add_argument("--answer-file")
     run.add_argument("--dry-run", action="store_true")
+    run.add_argument("-y", "--yes", action="store_true", default=argparse.SUPPRESS,
+                     help="accept the displayed run plan; cannot confirm official correctness")
     args = parser.parse_args(args_list)
     try:
         if args.action == "setup":
@@ -280,11 +296,29 @@ def main(argv: list[str] | None = None) -> int:
                               if (category_dir(name) / "cases").is_dir() else [] for name in CATEGORIES}, indent=2))
         elif args.action == "archive":
             selected = CATEGORIES if args.all_categories else (args.category,)
-            print(json.dumps(archive_categories(ROOT, selected, confirm=args.confirm), indent=2))
+            preview = archive_categories(ROOT, selected)
+            if args.confirm and preview["status"] == "ready":
+                print(json.dumps(preview, indent=2), file=sys.stderr)
+                if ask("Archive these case and run directories", yes=args.yes):
+                    print(json.dumps(archive_categories(ROOT, selected, confirm=True), indent=2))
+                else:
+                    print(json.dumps({**preview, "status": "cancelled"}, indent=2))
+            else:
+                print(json.dumps(preview, indent=2))
         elif args.action == "archives":
             print(json.dumps(list_archives(ROOT), indent=2))
         elif args.action == "restore":
-            print(json.dumps(restore_archive(ROOT, args.archive_id, confirm=args.confirm), indent=2))
+            preview = restore_archive(ROOT, args.archive_id)
+            if args.confirm:
+                if preview["status"] != "ready":
+                    raise ValueError("restore refused: archive already restored or active case/run data conflicts")
+                print(json.dumps(preview, indent=2), file=sys.stderr)
+                if ask("Restore this archive", yes=args.yes):
+                    print(json.dumps(restore_archive(ROOT, args.archive_id, confirm=True), indent=2))
+                else:
+                    print(json.dumps({**preview, "status": "cancelled"}, indent=2))
+            else:
+                print(json.dumps(preview, indent=2))
         elif args.action == "init":
             print(init_case(args.category, args.case_id, args.scope_note, args.time_limit_minutes, args.target))
         elif args.action == "seal":
@@ -322,11 +356,17 @@ def main(argv: list[str] | None = None) -> int:
             if args.dry_run:
                 print(json.dumps(plan, indent=2))
             else:
-                if not args.quiet:
-                    print(f"Requested: model={config['model']} effort={config['effort']} "
-                          f"daybreak={config['daybreak']} network={config['network_access']} "
-                          f"proxy={'on' if plan['proxy_active'] else 'off'} "
-                          f"progress={'on' if config['progress'] else 'off'}", file=sys.stderr)
+                print(f"Run plan: category={args.category} case={args.case_id} path={case_path} "
+                      f"limit={case['time_limit_minutes']}min preset={args.preset} "
+                      f"model={config['model']} effort={config['effort']} "
+                      f"daybreak={config['daybreak']} network={config['network_access']} "
+                      f"proxy={'on' if plan['proxy_active'] else 'off'} "
+                      f"progress={'on' if config['progress'] else 'off'}", file=sys.stderr)
+                print("Target: " + _safe_plan_value(case.get("authorized_target") or "none") +
+                      " | scope: " + _safe_plan_value(case.get("scope_note") or ""), file=sys.stderr)
+                if not ask("Start this run", yes=args.yes):
+                    print("Run cancelled; no model or target request started.", file=sys.stderr)
+                    return 0
                 if config["orchestration"] == "interactive":
                     run_root = run_interactive(args.category, args.case_id, config, switches, answer_file, answer_hash)
                 else:
@@ -343,6 +383,9 @@ def main(argv: list[str] | None = None) -> int:
                     print(f"ログ保存先：{run_root}", file=sys.stderr)
         else:
             parser.print_help()
+    except ConfirmationCancelled:
+        print("Cancelled; no operation started.", file=sys.stderr)
+        return 130
     except (ValueError, OSError, json.JSONDecodeError) as exc:
         parser.error(str(exc))
     return 0

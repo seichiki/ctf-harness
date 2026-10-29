@@ -5,6 +5,11 @@ if ! command -v uv >/dev/null 2>&1; then
   echo "uv is required. Install uv and Python 3.12, then run: uv sync --locked" >&2
   exit 127
 fi
+if { [ "${1:-}" = -y ] || [ "${1:-}" = --yes ]; } &&
+   [ "${2:-}" = tools ] && [ "${3:-}" = install ]; then
+  shift 3
+  exec uv run --no-project --offline --python 3.12 python -m harness.toolinstall --yes "$@"
+fi
 if [ "${1:-}" = tools ] && [ "${2:-}" = install ]; then
   shift 2
   exec uv run --no-project --offline --python 3.12 python -m harness.toolinstall "$@"

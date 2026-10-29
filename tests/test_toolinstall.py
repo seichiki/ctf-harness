@@ -148,14 +148,27 @@ class InstallerTests(unittest.TestCase):
         install.assert_not_called()
         with patch.object(toolinstall, "inventory", return_value=[g["item"] for g in groups]), \
              patch.object(toolinstall, "install", return_value=0) as install, \
+             patch.object(toolinstall.sys.stdin, "isatty", return_value=False), \
+             patch("builtins.input") as read, redirect_stdout(io.StringIO()):
+            self.assertEqual(toolinstall.main(["--required", "--yes"]), 0)
+        read.assert_not_called()
+        self.assertEqual([unit["id"] for unit in install.call_args.args[0]], ["gdb"])
+        with patch.object(toolinstall, "inventory", return_value=[g["item"] for g in groups]), \
+             patch.object(toolinstall, "install") as install, \
+             patch.object(toolinstall.sys.stdin, "isatty", return_value=False), \
+             redirect_stdout(io.StringIO()):
+            self.assertEqual(toolinstall.main(["--yes"]), 2)
+        install.assert_not_called()
+        with patch.object(toolinstall, "inventory", return_value=[g["item"] for g in groups]), \
+             patch.object(toolinstall, "install", return_value=0) as install, \
              patch.object(toolinstall.sys.stdin, "isatty", return_value=True), \
-             patch("builtins.input", return_value="INSTALL"), \
+             patch("builtins.input", return_value="y"), \
              redirect_stdout(io.StringIO()):
             self.assertEqual(toolinstall.main(["--all"]), 0)
         self.assertEqual([unit["id"] for unit in install.call_args.args[0]], ["gdb", "unzip"])
         with patch.object(toolinstall, "inventory", return_value=[g["item"] for g in groups]), \
              patch.object(toolinstall, "install", return_value=0) as install, \
-             patch("builtins.input", return_value="INSTALL"), \
+             patch("builtins.input", return_value=""), \
              patch.object(toolinstall.sys.stdin, "isatty", return_value=True), \
              redirect_stdout(io.StringIO()):
             self.assertEqual(toolinstall.main(["--required"]), 0)
@@ -251,7 +264,7 @@ class InstallerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "harness").mkdir()
-            for file in ("__init__.py", "config.py", "toolcheck.py", "toolinstall.py"):
+            for file in ("__init__.py", "config.py", "confirm.py", "toolcheck.py", "toolinstall.py"):
                 source = Path(toolinstall.__file__).parent / file
                 (root / "harness" / file).write_bytes(source.read_bytes())
             shutil.copy2(Path(toolinstall.__file__).resolve().parents[1] / "ctf-start",

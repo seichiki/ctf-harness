@@ -19,6 +19,7 @@ import tty
 from pathlib import Path
 
 from harness import toolcheck
+from harness.confirm import ConfirmationCancelled, ConfirmationUnavailable, ask
 from harness.config import ROOT
 
 PROBLEMS = {"missing", "misconfigured", "incompatible"}
@@ -321,6 +322,8 @@ def main(argv: list[str] | None = None) -> int:
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--all", action="store_true", help="plan every currently missing tool")
     mode.add_argument("--required", action="store_true", help="plan required missing tools only")
+    parser.add_argument("-y", "--yes", action="store_true",
+                        help="accept the displayed install plan; still requires a tool selection")
     args = parser.parse_args(argv)
     try:
         groups = missing_groups(inventory())
@@ -351,13 +354,16 @@ def main(argv: list[str] | None = None) -> int:
             if unit["command"] is None:
                 print("  MANUAL ONLY: this unit will be skipped.")
         print("No sudo, system package install, global CA, or Codex login changes are planned.")
-        if not sys.stdin.isatty():
-            print("Confirmation needs a TTY; nothing installed.", file=sys.stderr)
-            return 2
-        if input("Type INSTALL to start these units: ").strip() != "INSTALL":
+        if not ask("Install these units", yes=args.yes):
             print("Cancelled; no installation started.")
             return 0
         return install(units)
+    except ConfirmationUnavailable as exc:
+        print(f"{exc}; nothing installed.", file=sys.stderr)
+        return 2
+    except ConfirmationCancelled:
+        print("\nCancelled; no installation started.", file=sys.stderr)
+        return 130
     except (ValueError, OSError, json.JSONDecodeError, subprocess.SubprocessError) as exc:
         print(f"Installer could not prepare plan: {safe_text(str(exc))}", file=sys.stderr)
         return 2

@@ -18,7 +18,7 @@ codex login                      # sign in with your own ChatGPT account
 ./ctf-start                     # new-problem wizard in a terminal
 ```
 
-The no-argument wizard starts a new problem directly. Choose a category and name; the case ID and draft directory are created immediately. It displays `配布ファイル保存先：<case>/input/files` and `Enterで完了`. Put distributed files there yourself, if any, and press Enter. The wizard lists the files found. Enter the multiline problem statement and end with `/end`. Choose local input or one authorized live endpoint, a positive whole-minute limit (default 15), and test or production. Review settings and type `RUN` to seal and start. For a live target with saved network off, `ENABLE` is required for that run only. `/cancel`, EOF, or Ctrl-C before `RUN` leaves a named draft with no model or target request. Use a real terminal; noninteractive callers should use explicit commands. At the end, it prints `引継ぎファイル：...` if created, then `ログ保存先：...`.
+The no-argument wizard starts a new problem directly. Choose a category and name; the case ID and draft directory are created immediately. It displays `配布ファイル保存先：<case>/input/files` and `Enterで完了`. Put distributed files there yourself, if any, and press Enter. The wizard lists the files found. Enter the multiline problem statement and end with `/end`. Choose local input or one authorized live endpoint, a positive whole-minute limit (default 15), and test or production. Review settings and answer `Y/n` to seal and start (Enter means yes). `./ctf-start --yes` skips only this final operational confirmation, not the required problem inputs. For a live target with saved network off, `ENABLE` is still required for that run only. `/cancel`, EOF, or Ctrl-C before confirmation leaves a named draft with no model or target request. Use a real terminal; noninteractive callers should use explicit commands. At the end, it prints `引継ぎファイル：...` if created, then `ログ保存先：...`.
 
 Existing case reruns and archive/restore remain explicit commands. For automation or manual preparation:
 
@@ -30,6 +30,8 @@ Existing case reruns and archive/restore remain explicit commands. For automatio
 ./ctf-start run --category crypto --case-id sample --preset test --dry-run
 ./ctf-start run --category crypto --case-id sample --preset test
 ```
+
+An explicit `run` displays its saved target/scope and settings on stderr, then asks `Y/n` before launching a model (Enter means yes). For a complete unattended command, add `--yes` after `run`; `--dry-run --yes` remains a dry run. The pre-run plan is shown even with `--quiet`; stdout remains the final machine-readable JSON. `--yes` never supplies a missing category, case, URL or model setting, enables network access, accepts a flag, signs in, or grants an OS/Codex security prompt. In particular, `solved` and `ACCEPT <candidate-ID>` remain manual.
 
 `setup` writes only `.local/config.toml`, which Git ignores. It stores the model ID, effort, Daybreak, orchestration, network access, live progress, and optional HTTP proxy endpoint; it does **not** copy authentication. Existing local configs without new fields use safe defaults (`network_access = "off"`, `progress = false`, `proxy_url = ""`). If you already have a local config, edit it directly after reviewing `config.example.toml`; `setup` will not overwrite it. A model name in this file does not grant access. `run` reads saved values, then applies explicit CLI overrides only to that invocation: `--model`, `--effort`, `--daybreak`, `--orchestration`, `--network-access off|on`, `--progress`/`--no-progress`, and `--proxy URL`/`--no-proxy`.
 
@@ -59,7 +61,7 @@ For live terminal status during an external run, set `progress = true` in your p
 
 ## Archive and restore case data
 
-`archive` moves both case inputs and run history for one category, or for all categories only when explicitly requested. It previews by default; `--confirm` performs the move. It never deletes challenge data. The archive is placed in `archives/<timestamp-id>/`, with `manifest.json` listing every original and archived path. `archives/` is ignored by Git. After a successful move, selected `categories/<category>/cases/` and `runs/` are empty and usable. Personal `.local/` settings, tools, skills, source, `.venv/`, and Git history are untouched.
+`archive` moves both case inputs and run history for one category, or for all categories only when explicitly requested. It previews by default; `--confirm` shows the plan and asks `Y/n` before moving. `--confirm --yes` skips only that prompt. Restore follows the same confirmation rule. Neither command deletes challenge data. The archive is placed in `archives/<timestamp-id>/`, with `manifest.json` listing every original and archived path. `archives/` is ignored by Git. After a successful move, selected `categories/<category>/cases/` and `runs/` are empty and usable. Personal `.local/` settings, tools, skills, source, `.venv/`, and Git history are untouched.
 
 ```sh
 ./ctf-start archive --category web --dry-run

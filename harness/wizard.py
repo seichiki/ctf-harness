@@ -1,4 +1,4 @@
-"""No-argument, new-problem-only wizard. Drafts are never run without RUN."""
+"""No-argument, new-problem-only wizard with explicit operation confirmation."""
 
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ from typing import Callable
 from urllib.parse import urlsplit
 
 from harness import runner
+from harness.confirm import ConfirmationCancelled, ask
 from harness.config import CATEGORIES, ROOT, load, public_settings
 from harness.locks import category_lock
 from harness.report import sha256
@@ -190,12 +191,13 @@ def _summarize(case: Path, data: dict, config: dict, switches: dict) -> None:
     print(f"  プロキシ: {'on' if public['proxy_active'] else 'off'} / 進行表示: {'on' if config['progress'] else 'off'}")
     if config["orchestration"] == "interactive":
         print("  対話モードでは問題文を自動送信しません。")
-    print("RUN と入力するまでモデルは起動せず、ターゲットにも接続しません。")
+    print("実行確認を終えるまでモデルは起動せず、ターゲットにも接続しません。")
 
 
 def run_wizard(*, root: Path = ROOT, input_fn: Callable[[str], str] | None = None,
-               tty: bool | None = None, external_runner=None, interactive_runner=None) -> int:
-    """Create a visible draft immediately; seal and run only after explicit RUN."""
+               tty: bool | None = None, external_runner=None, interactive_runner=None,
+               auto_yes: bool = False) -> int:
+    """Create a visible draft immediately; seal and run after operation confirmation."""
     if tty is None:
         tty = sys.stdin.isatty() and sys.stdout.isatty()
     if not tty:
@@ -274,7 +276,8 @@ def run_wizard(*, root: Path = ROOT, input_fn: Callable[[str], str] | None = Non
                     run_config = {**saved_config, "network_access": data["network"]}
                     switches = runner.choose_switches(data["preset"], "auto", "off")
                     _summarize(case, data, run_config, switches)
-                    if _read(input_fn, "実行するなら RUN（それ以外は中止）: ").strip() != "RUN":
+                    if not ask("封印して実行しますか", yes=auto_yes,
+                               input_fn=lambda prompt: _read(input_fn, prompt), tty=tty):
                         raise Cancelled
                 step += 1
             except Back:
@@ -310,7 +313,7 @@ def run_wizard(*, root: Path = ROOT, input_fn: Callable[[str], str] | None = Non
         else:
             print(f"対話セッション: {run_root}")
         return 0
-    except Cancelled:
+    except (Cancelled, ConfirmationCancelled):
         if case is None or not case.is_dir():
             print("中止しました。ケースは作成されていません。")
         else:

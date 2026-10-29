@@ -625,14 +625,40 @@ class RunnerExecutionTests(unittest.TestCase):
         with patch.object(cli, "load", return_value=dict(self.config)), \
              patch.object(cli, "run_external") as external, \
              redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
-            self.assertEqual(cli.main(["run", "--category", "misc", "--case-id", "fixture"]), 0)
+            self.assertEqual(cli.main(["run", "--category", "misc", "--case-id", "fixture", "--yes"]), 0)
             self.assertNotIn("owner_confirmation", external.call_args.kwargs)
             self.assertEqual(cli.main(["run", "--category", "misc", "--case-id", "fixture",
-                                       "--owner-confirmation"]), 0)
+                                       "--owner-confirmation", "--yes"]), 0)
             self.assertTrue(external.call_args.kwargs["owner_confirmation"])
             with self.assertRaises(SystemExit):
                 cli.main(["run", "--category", "misc", "--case-id", "fixture",
                           "--owner-confirmation", "--quiet"])
+
+    def test_explicit_run_without_tty_or_yes_never_launches(self):
+        with patch.object(cli, "load", return_value=dict(self.config)), \
+             patch.object(cli, "run_external") as external, \
+             patch.object(cli.sys.stdin, "isatty", return_value=False), \
+             patch("builtins.input", side_effect=AssertionError("non-TTY must not prompt")), \
+             redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            with self.assertRaises(SystemExit):
+                cli.main(["run", "--category", "misc", "--case-id", "fixture"])
+        external.assert_not_called()
+
+    def test_explicit_run_n_cancels_and_blank_accepts(self):
+        with patch.object(cli, "load", return_value=dict(self.config)), \
+             patch.object(cli, "run_external") as external, \
+             patch.object(cli.sys.stdin, "isatty", return_value=True), \
+             patch("builtins.input", return_value="n"), \
+             redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            self.assertEqual(cli.main(["run", "--category", "misc", "--case-id", "fixture"]), 0)
+        external.assert_not_called()
+        with patch.object(cli, "load", return_value=dict(self.config)), \
+             patch.object(cli, "run_external") as external, \
+             patch.object(cli.sys.stdin, "isatty", return_value=True), \
+             patch("builtins.input", return_value=""), \
+             redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            self.assertEqual(cli.main(["run", "--category", "misc", "--case-id", "fixture"]), 0)
+        external.assert_called_once()
 
     def test_live_progress_streams_roles_and_results_without_secrets(self):
         secret = "session-cookie-secret-value"
@@ -728,8 +754,8 @@ class RunnerExecutionTests(unittest.TestCase):
              redirect_stderr(stderr), redirect_stdout(stdout):
             external.side_effect = lambda *args, **kwargs: print(json.dumps({"status": "fixture"}))
             self.assertEqual(cli.main(["run", "--category", "misc", "--case-id", "fixture",
-                                       "--quiet"]), 0)
-        self.assertEqual(stderr.getvalue(), "")
+                                       "--quiet", "--yes"]), 0)
+        self.assertIn("Run plan:", stderr.getvalue())
         self.assertFalse(external.call_args.kwargs["progress"])
         self.assertEqual(json.loads(stdout.getvalue()), {"status": "fixture"})
 
@@ -741,11 +767,17 @@ class RunnerExecutionTests(unittest.TestCase):
              patch.object(cli, "run_external") as external, \
              redirect_stderr(stderr), redirect_stdout(stdout):
             external.side_effect = lambda *args, **kwargs: print(json.dumps({"status": "fixture"}))
-            self.assertEqual(cli.main(["run", "--category", "misc", "--case-id", "fixture"]), 0)
+            self.assertEqual(cli.main(["run", "--category", "misc", "--case-id", "fixture", "--yes"]), 0)
         self.assertIn("model=gpt-5.6-sol", stderr.getvalue())
         self.assertIn("network=on proxy=on progress=on", stderr.getvalue())
         self.assertNotIn("127.0.0.1", stderr.getvalue())
         self.assertEqual(json.loads(stdout.getvalue()), {"status": "fixture"})
+
+    def test_run_plan_masks_url_credentials_and_sensitive_query(self):
+        shown = cli._safe_plan_value("https://user:pass@example.test/?token=topsecret")
+        self.assertNotIn("user:pass", shown)
+        self.assertNotIn("topsecret", shown)
+        self.assertIn("[REDACTED]", shown)
 
     def test_progress_reports_failure_and_cancellation(self):
         _, summary, _ = self.run_mocked({"verifier": "failure"}, progress=True)
@@ -782,7 +814,7 @@ class RunnerExecutionTests(unittest.TestCase):
         with patch.object(cli, "load", side_effect=selected), \
              patch.object(cli, "run_external") as external, redirect_stderr(io.StringIO()):
             self.assertEqual(cli.main(["run", "--category", "misc", "--case-id", "fixture",
-                                       "--progress"]), 0)
+                                       "--progress", "--yes"]), 0)
         self.assertTrue(external.call_args.kwargs["progress"])
 
     def test_network_on_reaches_all_multi_roles_without_search(self):
@@ -805,7 +837,7 @@ class RunnerExecutionTests(unittest.TestCase):
         output = io.StringIO()
         with patch.object(cli, "load", return_value=self.config) as loaded, redirect_stdout(output):
             self.assertEqual(cli.main(["run", "--category", "misc", "--case-id", "fixture",
-                                       "--preset", "test", "--network-access", "on", "--dry-run"]), 0)
+                                       "--preset", "test", "--network-access", "on", "--dry-run", "--yes"]), 0)
         self.assertEqual(loaded.call_args.args[0]["network_access"], "on")
         plan = json.loads(output.getvalue())
         self.assertTrue(plan["network_access_requested"])
@@ -1178,15 +1210,44 @@ class ArchiveTests(unittest.TestCase):
             self.assertEqual(cli.main(["archive", "--category", "web", "--dry-run"]), 0)
         self.assertEqual(json.loads(output.getvalue())["status"], "ready")
         self.assertTrue((self.cases / "fixture").exists())
-        with patch.object(cli, "ROOT", self.root), redirect_stdout(io.StringIO()) as output:
-            self.assertEqual(cli.main(["archive", "--category", "web", "--confirm"]), 0)
+        with patch.object(cli, "ROOT", self.root), redirect_stdout(io.StringIO()) as output, \
+             redirect_stderr(io.StringIO()):
+            self.assertEqual(cli.main(["archive", "--category", "web", "--confirm", "--yes"]), 0)
         archive_id = json.loads(output.getvalue())["archive_id"]
         with patch.object(cli, "ROOT", self.root), redirect_stdout(io.StringIO()) as output:
             self.assertEqual(cli.main(["archives"]), 0)
         self.assertEqual(json.loads(output.getvalue())[0]["archive_id"], archive_id)
-        with patch.object(cli, "ROOT", self.root), redirect_stdout(io.StringIO()) as output:
-            self.assertEqual(cli.main(["restore", "--archive-id", archive_id, "--confirm"]), 0)
+        with patch.object(cli, "ROOT", self.root), redirect_stdout(io.StringIO()) as output, \
+             redirect_stderr(io.StringIO()):
+            self.assertEqual(cli.main(["restore", "--archive-id", archive_id, "--confirm", "--yes"]), 0)
         self.assertEqual(json.loads(output.getvalue())["status"], "restored")
+
+    def test_archive_and_restore_no_and_non_tty_are_non_mutating(self):
+        self.populate()
+        with patch.object(cli, "ROOT", self.root), patch.object(cli, "ask", return_value=False), \
+             redirect_stdout(io.StringIO()) as out, redirect_stderr(io.StringIO()):
+            self.assertEqual(cli.main(["archive", "--category", "web", "--confirm"]), 0)
+        self.assertEqual(json.loads(out.getvalue())["status"], "cancelled")
+        self.assertTrue((self.cases / "fixture").exists())
+        with patch.object(cli, "ROOT", self.root), \
+             patch.object(cli.sys.stdin, "isatty", return_value=False), \
+             redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            with self.assertRaises(SystemExit):
+                cli.main(["archive", "--category", "web", "--confirm"])
+        self.assertTrue((self.cases / "fixture").exists())
+        with patch.object(cli, "ROOT", self.root), redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(cli.main(["archive", "--category", "web", "--yes"]), 0)
+        self.assertEqual(json.loads(out.getvalue())["status"], "ready")
+        self.assertTrue((self.cases / "fixture").exists())
+        with patch.object(cli, "ROOT", self.root), \
+             redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+            self.assertEqual(cli.main(["--yes", "archive", "--category", "web", "--confirm"]), 0)
+        archive_id = json.loads(next((self.root / "archives").glob("*/manifest.json")).read_text())["archive_id"]
+        with patch.object(cli, "ROOT", self.root), patch.object(cli, "ask", return_value=False), \
+             redirect_stdout(io.StringIO()) as out, redirect_stderr(io.StringIO()):
+            self.assertEqual(cli.main(["restore", "--archive-id", archive_id, "--confirm"]), 0)
+        self.assertEqual(json.loads(out.getvalue())["status"], "cancelled")
+        self.assertFalse((self.cases / "fixture").exists())
 
 
 class SourceAndExportTests(unittest.TestCase):
