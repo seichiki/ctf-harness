@@ -1,0 +1,20 @@
+#!/bin/sh
+set -eu
+root=$(CDPATH= cd -- "$(dirname -- "$0")/../../.." && pwd)
+tools="$root/.local/tools"
+base="$tools/ubuntu-root/usr/bin"
+lib="$tools/ubuntu-root/usr/lib/x86_64-linux-gnu"
+name=$(basename -- "$0")
+case "$name" in
+    gdb|socat|tshark)
+        export LD_LIBRARY_PATH="$lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+        exec "$base/$name" "$@" ;;
+    exiftool)
+        export PERL5LIB="$tools/ubuntu-root/usr/share/perl5${PERL5LIB:+:$PERL5LIB}"
+        exec "$base/exiftool" "$@" ;;
+    unzip)
+        exec "$base/unzip" "$@" ;;
+    7z)
+        exec "$tools/ubuntu-root/usr/lib/7zip/7z" "$@" ;;
+    *) echo "unknown local tool" >&2; exit 2 ;;
+esac

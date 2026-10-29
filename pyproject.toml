@@ -4,5 +4,15 @@ version = "0.1.0"
 requires-python = ">=3.12,<3.13"
 dependencies = []
 
+[dependency-groups]
+web = ["httpx", "beautifulsoup4", "lxml"]
+crypto = ["pycryptodome", "sympy"]
+pwn = ["pwntools"]
+reverse = ["z3-solver", "capstone", "pyelftools", "pefile"]
+forensics = ["Pillow", "scapy", "exifread", "pypdf"]
+osint = ["dnspython"]
+misc = ["regex"]
+
 [tool.uv]
 package = false
+default-groups = ["web", "crypto", "pwn", "reverse", "forensics", "osint", "misc"]

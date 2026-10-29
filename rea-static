@@ -1,0 +1,4 @@
+#!/bin/sh
+set -eu
+root=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+exec uv run --no-cache --project "$root" --offline --locked --no-sync python "$root/harness/rea_static.py" "$@"

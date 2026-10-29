@@ -5,6 +5,8 @@ __pycache__/
 .pytest_cache/
 categories/*/cases/
 categories/*/runs/
+categories/*/.harness.lock
+archives/
 cases/
 runs/
 answers/
