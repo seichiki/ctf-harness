@@ -7,3 +7,4 @@ orchestration = "single"
 network_access = "off" # sandbox outbound network request; set "on" only for an authorized live target
 progress = false       # safe terminal status on stderr for external runs
 proxy_url = ""         # optional HTTP proxy endpoint, for example "http://127.0.0.1:8080"
+writeup_draft = false # after owner-confirmed acceptance, ask a separate GPT run for an evidence-based draft

@@ -212,6 +212,8 @@ def main(argv: list[str] | None = None) -> int:
     setup.add_argument("--network-access", choices=NETWORK_ACCESS, default="off")
     setup.add_argument("--progress", action="store_true")
     setup.add_argument("--proxy", dest="proxy_url", default="")
+    setup.add_argument("--writeup-draft", action="store_true",
+                       help="request an evidence-based GPT draft after owner-confirmed acceptance")
     sub.add_parser("doctor", help="check local CLI/uv/source presence without model requests")
     tools = sub.add_parser(
         "tools", help="category tool inventory; tools install opens the installer",
@@ -263,6 +265,10 @@ def main(argv: list[str] | None = None) -> int:
     proxy_group = run.add_mutually_exclusive_group()
     proxy_group.add_argument("--proxy", dest="proxy_url", help="HTTP proxy for agent shell tools only")
     proxy_group.add_argument("--no-proxy", dest="proxy_url", action="store_const", const="")
+    writeup_group = run.add_mutually_exclusive_group()
+    writeup_group.add_argument("--writeup-draft", dest="writeup_draft", action="store_true")
+    writeup_group.add_argument("--no-writeup-draft", dest="writeup_draft", action="store_false")
+    run.set_defaults(writeup_draft=None)
     run.add_argument("--quiet", action="store_true", help="suppress startup status and live progress")
     run.add_argument("--owner-confirmation", action="store_true",
                      help="allow this terminal's user to confirm a submitted candidate and stop early")
@@ -279,7 +285,8 @@ def main(argv: list[str] | None = None) -> int:
             path = save(validate({"model": args.model, "effort": args.effort,
                                   "daybreak": args.daybreak, "orchestration": args.orchestration,
                                   "network_access": args.network_access,
-                                  "progress": args.progress, "proxy_url": args.proxy_url}))
+                                  "progress": args.progress, "proxy_url": args.proxy_url,
+                                  "writeup_draft": args.writeup_draft}))
             print(f"Saved local choices: {path}; model availability is account-dependent and not yet verified")
         elif args.action == "doctor":
             print(json.dumps(doctor(), indent=2))
@@ -326,7 +333,7 @@ def main(argv: list[str] | None = None) -> int:
         elif args.action == "run":
             config = load({key: getattr(args, key) for key in
                            ("model", "effort", "daybreak", "orchestration", "network_access",
-                            "progress", "proxy_url")})
+                            "progress", "proxy_url", "writeup_draft")})
             # An explicit --no-proxy also clears inherited proxy variables for this invocation.
             config["proxy_override_off"] = args.proxy_url == ""
             if args.quiet:
@@ -361,7 +368,8 @@ def main(argv: list[str] | None = None) -> int:
                       f"model={config['model']} effort={config['effort']} "
                       f"daybreak={config['daybreak']} network={config['network_access']} "
                       f"proxy={'on' if plan['proxy_active'] else 'off'} "
-                      f"progress={'on' if config['progress'] else 'off'}", file=sys.stderr)
+                      f"progress={'on' if config['progress'] else 'off'} "
+                      f"writeup_draft={'on' if config.get('writeup_draft', False) else 'off'}", file=sys.stderr)
                 print("Target: " + _safe_plan_value(case.get("authorized_target") or "none") +
                       " | scope: " + _safe_plan_value(case.get("scope_note") or ""), file=sys.stderr)
                 if not ask("Start this run", yes=args.yes):
@@ -378,6 +386,8 @@ def main(argv: list[str] | None = None) -> int:
                         print(f"正解報告：{run_root / 'OWNER_CONFIRMATION.json'}", file=sys.stderr)
                     if (run_root / "SOLUTION.md").is_file():
                         print(f"解法ファイル：{run_root / 'SOLUTION.md'}", file=sys.stderr)
+                    if (run_root / "WRITEUP_DRAFT.md").is_file():
+                        print(f"GPT下書き：{run_root / 'WRITEUP_DRAFT.md'}", file=sys.stderr)
                     if (run_root / "HANDOFF.md").is_file():
                         print(f"引継ぎファイル：{run_root / 'HANDOFF.md'}", file=sys.stderr)
                     print(f"ログ保存先：{run_root}", file=sys.stderr)

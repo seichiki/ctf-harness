@@ -72,6 +72,8 @@ class Handoff:
             lines.append("- `CANDIDATES.md` and `candidates.json`: all exact role proposals and report evidence pointers; none is verified by the harness.")
         if (self.run_root / "SOLUTION.md").is_file():
             lines.append("- `SOLUTION.md`: owner-reported accepted candidate and recorded derivation.")
+        if (self.run_root / "WRITEUP_DRAFT.md").is_file():
+            lines.append("- `WRITEUP_DRAFT.md`: separate GPT draft; verify every claim against recorded evidence.")
         if (self.run_root / "OWNER_CONFIRMATION.json").is_file():
             lines.append("- `OWNER_CONFIRMATION.json`: durable owner-reported acceptance metadata.")
         for role in sorted(ROLES):

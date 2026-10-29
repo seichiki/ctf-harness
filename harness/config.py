@@ -17,7 +17,7 @@ DAYBREAK = ("off", "blue")
 ORCHESTRATION = ("single", "multi", "interactive")
 NETWORK_ACCESS = ("off", "on")
 DEFAULTS = {"model": "", "effort": "medium", "daybreak": "off", "orchestration": "single",
-            "network_access": "off", "progress": False, "proxy_url": ""}
+            "network_access": "off", "progress": False, "proxy_url": "", "writeup_draft": False}
 
 
 def validate(config: dict) -> dict:
@@ -33,6 +33,8 @@ def validate(config: dict) -> dict:
             raise ValueError(f"{key} must be one of: {', '.join(choices)}")
     if type(data["progress"]) is not bool:
         raise ValueError("progress must be true or false")
+    if type(data["writeup_draft"]) is not bool:
+        raise ValueError("writeup_draft must be true or false")
     proxy = data["proxy_url"]
     if not isinstance(proxy, str):
         raise ValueError("proxy_url must be an HTTP proxy endpoint or empty")

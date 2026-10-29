@@ -189,6 +189,7 @@ def _summarize(case: Path, data: dict, config: dict, switches: dict) -> None:
     print(f"  モデル: {config['model']} / effort: {config['effort']} / Daybreak: {config['daybreak']}")
     print(f"  実行方式: {config['orchestration']} / ネットワーク: {config['network_access']}")
     print(f"  プロキシ: {'on' if public['proxy_active'] else 'off'} / 進行表示: {'on' if config['progress'] else 'off'}")
+    print(f"  GPT writeup下書き: {'on' if config.get('writeup_draft', False) else 'off'}（正解報告後のみ）")
     if config["orchestration"] == "interactive":
         print("  対話モードでは問題文を自動送信しません。")
     print("実行確認を終えるまでモデルは起動せず、ターゲットにも接続しません。")
@@ -341,6 +342,9 @@ def run_wizard(*, root: Path = ROOT, input_fn: Callable[[str], str] | None = Non
                 solution = run_root / "SOLUTION.md"
                 if solution.is_file():
                     print(f"解法ファイル：{solution}")
+                draft = run_root / "WRITEUP_DRAFT.md"
+                if draft.is_file():
+                    print(f"GPT下書き：{draft}")
                 handoff = run_root / "HANDOFF.md"
                 if handoff.is_file():
                     print(f"引継ぎファイル：{handoff}")

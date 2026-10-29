@@ -33,7 +33,9 @@ codex login                      # 自分の ChatGPT アカウントでサイン
 
 明示的な `run` も、保存された接続先・許可範囲・設定を stderr に表示してから `Y/n` で起動を確認します（EnterだけならYes）。非対話実行では `run` の後に `--yes` を付けてください。`--dry-run --yes` は引き続き確認のみで実行しません。`--quiet` でも実行前の計画は stderr に表示し、stdout の最終 JSON は維持します。`--yes` は不足する問題情報、ログイン、OS・Codex の権限確認、正答判定を代行しません。`solved` と `ACCEPT <候補ID>` は人の操作として残ります。
 
-`setup` が書き込むのは、Git の対象外になっている `.local/config.toml` だけです。モデル ID、推論の強度、Daybreak、実行方式、ネットワーク、進行表示、任意の HTTP プロキシを保存し、認証情報はコピーしません。古い設定ファイルで新しい項目がなければ安全側の初期値（`network_access = "off"`、`progress = false`、`proxy_url = ""`）を使います。設定ファイルが既にある場合は、`config.example.toml` を見て直接編集してください。`setup` は上書きしません。モデル名を保存しても利用権限は得られません。`run` の `--model`、`--effort`、`--daybreak`、`--orchestration`、`--network-access off|on`、`--progress` / `--no-progress`、`--proxy URL` / `--no-proxy` は、その1回だけ保存値に優先します。
+`setup` が書き込むのは、Git の対象外になっている `.local/config.toml` だけです。モデル ID、推論の強度、Daybreak、実行方式、ネットワーク、進行表示、任意の HTTP プロキシ、GPT writeup下書きのオン・オフを保存し、認証情報はコピーしません。古い設定ファイルで新しい項目がなければ安全側の初期値（`network_access = "off"`、`progress = false`、`proxy_url = ""`、`writeup_draft = false`）を使います。設定ファイルが既にある場合は、`config.example.toml` を見て直接編集してください。`setup` は上書きしません。モデル名を保存しても利用権限は得られません。`run` の `--model`、`--effort`、`--daybreak`、`--orchestration`、`--network-access off|on`、`--progress` / `--no-progress`、`--proxy URL` / `--no-proxy`、`--writeup-draft` / `--no-writeup-draft` は、その1回だけ保存値に優先します。
+
+GPT下書きは既定でオフです。使うときは `.local/config.toml` に `writeup_draft = true` を追加するか、明示的な `run` に `--writeup-draft` を付けます。ユーザーが `solved` と `ACCEPT <候補ID>` で公式正解を報告した実行に限り、元の結果を保存した後、別の Codex CLI セッションを1回起動します。下書き役には問題文、確認済み候補、該当役割の記録済みコマンド・終了コード・出力抜粋・テキスト成果物だけを上限付きで渡し、`SOLUTION.md` と先行モデルの構造化レポートの解法説明は渡しません。役割が作成したテキスト成果物にはモデルの主張が含まれる可能性があり、独立に検証された証拠ではありません。子実行は検索・シェルネットワークをオフ、read-only サンドボックス、標準アクセス区分で要求し、既存のモデル ID と effort を使用します。`WRITEUP_DRAFT.md` は検証前の下書き、`writeup/WRITEUP_EVIDENCE.md` は送った証拠の控えです。認証情報のマスクは最善努力なので、共有前に両方を確認してください。下書き失敗・時間切れでも元の `user_confirmed` 結果は保持され、`result.json` の `writeup_draft` に状態を記録します。未確認候補や対話セッションでは生成しません。
 
 個人設定を保存した後は `./ctf-start` で新しい問題を作成・実行できます。封印済みケースを再実行するには `./ctf-start run --category web --case-id <既存ケースID> --preset test` を使います。自動処理などで表示を抑えるときは明示的な `run` に `--quiet` を付けます。起動時の設定表示と進行表示を止め、最後の JSON は標準出力に残します。通常の明示的実行では要求設定を標準エラーへ短く表示します。プロキシはオン・オフだけを示し、URL は表示しません。実問題に接続する前に dry-run で計画を確認してください。
 
@@ -46,6 +48,8 @@ codex login                      # 自分の ChatGPT アカウントでサイン
 子プロセスの停止前に `OWNER_CONFIRMATION.json` を原子的に保存します。`SOLUTION.md` の生成だけに失敗した場合も正解報告と元の役割ログが残り、終了処理で再生成を試みます。正解報告自体を保存できなければ、停止も正解扱いもしません。この操作は最前面の端末からのみ受け付け、入力は Codex 子プロセスへ渡しません。
 
 ## 実行方式と切替設定
+
+既存ケースの明示的な実行で下書きを試す場合は、`./ctf-start run --category web --case-id <ID> --owner-confirmation --writeup-draft` のように正答報告も有効にします。`skip`、`wrong`、候補なしでは追加のGPT実行は起動しません。
 
 `--orchestration single` は新しい CLI セッションを1つ起動します。公開版の初期値です。`--orchestration multi` は、最初の検証役、並列に動く独立した2つの解答役、結果を固定してから確認する別の検証役を起動します。それぞれ別の CLI プロセスであり、Codex のネイティブなサブエージェントではありません。`--orchestration interactive` は、問題文を自動送信せずに新しい対話セッションを開きます。対話モードで Blue を使うときは、文書化された `daybreak=true` を指定したうえで、問題を入力する前に `/model` から **Daybreak Blue** を選んでください。選択状況は利用者の確認に基づいて「選択済み」または「不明」と記録します。サーバー側で適用されたことの証明にはなりません。オフの場合は `daybreak=false` と Blue ではないモデルを明示します。非対話のオフ設定では、さらに `--cyber-access-program standard` を指定します。Blue 設定では、各 `codex exec` に `daybreak_blue` を指定します。非対話実行ではグローバルのユーザー設定を読み込まず、既存の ChatGPT サインインを利用します。子 Codex プロセスへ渡す環境変数から API キーを除外します。
 

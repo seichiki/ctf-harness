@@ -29,6 +29,7 @@ from harness.proxy_diagnostics import scan as scan_proxy_diagnostics
 from harness.handoff import Handoff
 from harness.report import parse_report, sha256, write_schema
 from harness.solved import OwnerCancelledStop, OwnerConfirmedStop, OwnerControl, controlling_terminal
+from harness.writeup import generate_draft, _atomic_text as writeup_atomic_text
 
 SLUG = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*\Z")
 URL = re.compile(r"https?://[^\s<>\"']+")
@@ -755,6 +756,7 @@ def _run_external(category: str, case_id: str, config: dict, switches: dict,
                "progress_requested": progress,
                "owner_confirmation_requested": owner_confirmation,
                "owner_review": owner_review,
+               "writeup_draft_requested": bool(config.get("writeup_draft", False)),
                "approval_policy_requested": "on-request", "approval_policy_effective": "unverified",
                "candidate_file": "candidate.txt" if candidate_hash else None,
                "candidate_sha256": candidate_hash, "provenance_class": provenance,
@@ -775,6 +777,9 @@ def _run_external(category: str, case_id: str, config: dict, switches: dict,
                "agent_report_sha256": {name: value.get("report_sha256") for name, value in results.items()},
                "agent_thread_ids": {name: value.get("thread_id") for name, value in results.items()},
                "agent_usage": {name: value.get("usage", "unknown") for name, value in results.items()}}
+    summary["writeup_draft"] = ({"status": "disabled"} if not config.get("writeup_draft", False) else
+                                 {"status": "pending"} if accepted else
+                                 {"status": "skipped_unconfirmed"})
     (run_root / "result.json").write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
     if handoff is not None:
         try:
@@ -792,10 +797,37 @@ def _run_external(category: str, case_id: str, config: dict, switches: dict,
             handoff.finish(status, run_error_type)
         except Exception:
             pass
+    if config.get("writeup_draft", False) and accepted:
+        if reporter is not None:
+            reporter.emit("run", "separate GPT writeup draft started (recorded evidence only)")
+        try:
+            summary["writeup_draft"] = generate_draft(
+                run_root, case_path, accepted, config, codex_path,
+                scrub_api_environment, stop_process_group)
+        except subprocess.TimeoutExpired:
+            summary["writeup_draft"] = {"status": "timeout"}
+        except KeyboardInterrupt:
+            summary["writeup_draft"] = {"status": "interrupted"}
+        except Exception as exc:
+            # Error text may contain prompts or credentials; only retain its type.
+            summary["writeup_draft"] = {"status": "failed", "error_type": type(exc).__name__}
+        try:
+            writeup_atomic_text(run_root / "result.json", json.dumps(summary, indent=2) + "\n")
+        except OSError:
+            # The original result.json was already saved before the optional call.
+            summary["writeup_draft_result_save_error"] = "OSError"
+        if handoff is not None:
+            try:
+                handoff.event("run", "Separate GPT writeup draft: " + summary["writeup_draft"]["status"])
+            except Exception:
+                pass
+        if reporter is not None:
+            reporter.emit("run", "writeup draft " + summary["writeup_draft"]["status"])
     if reporter is not None:
         reporter.run_finished(status)
     print(json.dumps({"run_dir": str(run_root), "status": status, "candidate_sha256": candidate_hash,
                       "provenance": provenance, "candidate_count": len(proposals),
+                      "writeup_draft": summary["writeup_draft"],
                       "candidates_file": (str(run_root / "CANDIDATES.md") if (run_root / "CANDIDATES.md").is_file()
                                           else str(run_root / "candidates.json") if (run_root / "candidates.json").is_file()
                                           else None)}, indent=2))

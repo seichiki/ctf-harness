@@ -20,6 +20,16 @@ from harness import solved as solved_module
 
 
 class ConfigTests(unittest.TestCase):
+    def test_writeup_setting_defaults_off_and_accepts_one_run_override(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "config.toml"
+            path.write_text('model = "gpt-5.6-sol"\nwriteup_draft = true\n', encoding="utf-8")
+            self.assertTrue(config.load(path=path)["writeup_draft"])
+            self.assertFalse(config.load({"writeup_draft": False}, path)["writeup_draft"])
+            self.assertTrue(config.load(path=path)["writeup_draft"])
+            path.write_text('model = "gpt-5.6-sol"\n', encoding="utf-8")
+            self.assertFalse(config.load(path=path)["writeup_draft"])
+
     def test_reverse_requires_local_rea_before_external_launch(self):
         runner.require_rea_available("web")
         with patch.object(runner, "REA_STATIC", Path("/nonexistent/rea-static")):
@@ -41,6 +51,7 @@ class ConfigTests(unittest.TestCase):
                          "orchestration": "multi", "network_access": "on"}, path)
             self.assertEqual(config.load(path=path)["daybreak"], "blue")
             self.assertEqual(config.load(path=path)["network_access"], "on")
+            self.assertFalse(config.load(path=path)["writeup_draft"])
             self.assertEqual(config.load({"daybreak": "off"}, path)["daybreak"], "off")
             self.assertEqual(config.load({"network_access": "off"}, path)["network_access"], "off")
             with self.assertRaises(FileExistsError):
@@ -49,6 +60,7 @@ class ConfigTests(unittest.TestCase):
             path.write_text('model = "gpt-5.6-sol"\neffort = "high"\ndaybreak = "blue"\norchestration = "multi"\n',
                             encoding="utf-8")
             self.assertEqual(config.load(path=path)["network_access"], "off")
+            self.assertFalse(config.load(path=path)["writeup_draft"])
 
     def test_invalid_configuration_stops(self):
         for key, value in (("model", ""), ("model", "other/provider"), ("effort", "invalid"),
@@ -89,6 +101,8 @@ class ConfigTests(unittest.TestCase):
                 config.validate({"model": "gpt-5.6-sol", "proxy_url": proxy})
         with self.assertRaises(ValueError):
             config.validate({"model": "gpt-5.6-sol", "progress": "true"})
+        with self.assertRaises(ValueError):
+            config.validate({"model": "gpt-5.6-sol", "writeup_draft": "true"})
 
     def test_proxy_environment_only_for_agent_shell(self):
         endpoint = "http://127.0.0.1:8080"
@@ -594,6 +608,71 @@ class RunnerExecutionTests(unittest.TestCase):
         self.assertEqual(set(summary["owner_confirmation"]["roles"]),
                          {"verifier", "solver_a", "solver_b", "verifier_review"})
 
+    def test_opt_in_writeup_runs_only_after_owner_confirmation(self):
+        self.config["writeup_draft"] = True
+        class ConfirmFromTerminal(OwnerControl):
+            def start(self):
+                pass
+
+            def record_candidate(self, role, record):
+                super().record_candidate(role, record)
+                if role == "verifier":
+                    self.confirm("C1", "ACCEPT C1")
+
+        def fake_draft(run_root, case_path, accepted, config, codex_path, scrub_env, stop_group):
+            self.assertTrue((run_root / "result.json").is_file())
+            self.assertEqual(accepted["candidate"], "fixture-answer")
+            (run_root / "WRITEUP_DRAFT.md").write_text("# Fixture draft\n", encoding="utf-8")
+            return {"status": "completed", "file": "WRITEUP_DRAFT.md"}
+
+        with patch.object(runner, "generate_draft", side_effect=fake_draft) as draft:
+            path, summary, _ = self.run_mocked(owner_confirmation=True, owner_class=ConfirmFromTerminal)
+        draft.assert_called_once()
+        self.assertEqual(summary["status"], "user_confirmed")
+        self.assertEqual(summary["writeup_draft"]["status"], "completed")
+        self.assertTrue((path / "WRITEUP_DRAFT.md").is_file())
+
+        with patch.object(runner, "generate_draft") as draft:
+            _, summary, _ = self.run_mocked()
+        draft.assert_not_called()
+        self.assertEqual(summary["writeup_draft"]["status"], "skipped_unconfirmed")
+
+    def test_writeup_failure_cannot_erase_confirmed_result(self):
+        self.config["writeup_draft"] = True
+        class ConfirmFromTerminal(OwnerControl):
+            def start(self):
+                pass
+
+            def record_candidate(self, role, record):
+                super().record_candidate(role, record)
+                if role == "verifier":
+                    self.confirm("C1", "ACCEPT C1")
+
+        with patch.object(runner, "generate_draft", side_effect=OSError("secret-must-not-leak")):
+            path, summary, _ = self.run_mocked(owner_confirmation=True, owner_class=ConfirmFromTerminal)
+        self.assertEqual(summary["status"], "user_confirmed")
+        self.assertEqual(summary["writeup_draft"], {"status": "failed", "error_type": "OSError"})
+        self.assertTrue((path / "OWNER_CONFIRMATION.json").is_file())
+        self.assertNotIn("secret-must-not-leak", (path / "result.json").read_text())
+
+    def test_writeup_result_update_failure_keeps_initial_confirmed_result(self):
+        self.config["writeup_draft"] = True
+        class ConfirmFromTerminal(OwnerControl):
+            def start(self):
+                pass
+
+            def record_candidate(self, role, record):
+                super().record_candidate(role, record)
+                if role == "verifier":
+                    self.confirm("C1", "ACCEPT C1")
+
+        with patch.object(runner, "generate_draft", return_value={"status": "completed"}), \
+             patch.object(runner, "writeup_atomic_text", side_effect=OSError("disk unavailable")):
+            path, summary, _ = self.run_mocked(owner_confirmation=True, owner_class=ConfirmFromTerminal)
+        self.assertEqual(summary["status"], "user_confirmed")
+        self.assertEqual(summary["writeup_draft"]["status"], "pending")
+        self.assertTrue((path / "OWNER_CONFIRMATION.json").is_file())
+
     def test_final_review_rejection_preserves_candidates(self):
         class FinalReview(OwnerControl):
             def start(self):
@@ -786,7 +865,7 @@ class RunnerExecutionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / "config.toml"
             path.write_text('model = "gpt-5.6-sol"\nnetwork_access = "on"\n'
-                            f'progress = true\nproxy_url = "{endpoint}"\n', encoding="utf-8")
+                            f'progress = true\nproxy_url = "{endpoint}"\nwriteup_draft = true\n', encoding="utf-8")
             original = path.read_text(encoding="utf-8")
 
             def local_load(overrides):
@@ -796,11 +875,13 @@ class RunnerExecutionTests(unittest.TestCase):
             with patch.object(cli, "load", side_effect=local_load), redirect_stdout(output):
                 self.assertEqual(cli.main(["run", "--category", "misc", "--case-id", "fixture",
                                            "--network-access", "off", "--no-progress", "--no-proxy",
+                                           "--no-writeup-draft",
                                            "--dry-run"]), 0)
             plan = json.loads(output.getvalue())
             self.assertEqual((plan["network_access"], plan["progress"], plan["proxy_active"]),
                              ("off", False, False))
             self.assertNotIn(endpoint, output.getvalue())
+            self.assertFalse(plan["writeup_draft"])
             self.assertEqual(path.read_text(encoding="utf-8"), original)
 
             output = io.StringIO()
@@ -810,6 +891,7 @@ class RunnerExecutionTests(unittest.TestCase):
             inherited = json.loads(output.getvalue())
             self.assertTrue(inherited["progress"])
             self.assertTrue(inherited["proxy_active"])
+            self.assertTrue(inherited["writeup_draft"])
             self.assertNotIn(endpoint, output.getvalue())
 
     def test_quiet_suppresses_startup_and_saved_progress_but_keeps_stdout_json(self):
