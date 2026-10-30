@@ -23,7 +23,8 @@ from harness.confirm import ConfirmationCancelled, ConfirmationUnavailable, ask
 from harness.config import ROOT
 
 PROBLEMS = {"missing", "misconfigured", "incompatible"}
-NATIVE = {"gdb", "socat", "exiftool", "tshark", "binwalk", "7z", "unzip"}
+NATIVE = {"gdb", "socat", "exiftool", "tshark", "binwalk", "7z", "unzip", "steghide", "stegseek"}
+BASIC_APT = {"debugfs", "curl", "jq", "openssl", "readelf", "objdump", "strings", "file"}
 REA_NAMES = {"Ghidra", "Temurin JDK", "Node.js", "REA", "REA/Ghidra provider",
              "rea-static role interface"}
 SCRUB = re.compile(
@@ -187,6 +188,15 @@ def plan(selected: list[dict]) -> list[dict]:
         add(name, covers, ["bash", str(script), "--only", name],
             "Configured Ubuntu 26.04 package repository" +
             (", official Rustup/Cargo registry" if name == "binwalk" else ""), note)
+    for kind, name in sorted(keys):
+        if kind == "binary" and name in BASIC_APT:
+            add(name, [name], [sys.executable, "-m", "harness.install_requested", name],
+                "Configured Ubuntu package repository",
+                "Project-local Ubuntu package extraction; package revisions are logged.")
+        if kind == "on_demand":
+            add(name, [name], [sys.executable, "-m", "harness.install_requested", name],
+                "Curated Ubuntu package, PyPI distribution, or official project release",
+                "Installed only under ignored .local/tools; exact result and source revision are logged.")
     covered = {name for unit in units for name in unit["covers"]}
     selected_by_key = {group["key"]: group for group in selected}
     for kind, name in sorted(keys):
@@ -263,14 +273,17 @@ def _verify(unit: dict) -> list[str]:
                   if name not in statuses or statuses[name] != {"available"})
 
 
-def install(units: list[dict]) -> int:
+def install(units: list[dict], *, context: dict | None = None, summary_callback=None) -> int:
     run_dir = ROOT / ".local/install-runs" / (dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ") +
                                                f"-{os.getpid()}")
     run_dir.mkdir(parents=True, exist_ok=False)
     summary = {"created_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
+               "request": context,
                "units": [{"id": u["id"], "covers": u["covers"], "status": "pending"} for u in units]}
     summary_path = run_dir / "summary.json"
     _save(summary_path, summary)
+    if summary_callback is not None:
+        summary_callback(summary_path)
     done = 0
     try:
         for index, unit in enumerate(units):

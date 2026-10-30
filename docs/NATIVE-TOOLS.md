@@ -32,6 +32,8 @@ scripts/generate_native_manifest.py` after setup.
 | TShark 4.6.4 | Scapy parses and crafts many packet structures. | Wireshark dissectors and offline protocol field extraction. Local PCAP IPv4/UDP decoding passed. No live capture or group/capability change was made. An optional Falco plugin currently warns about missing `libsinsp.so.0`; the tested decoding still works. |
 | Binwalk 3.1.0 | `file` and `strings` can spot some bytes by hand. | Offset-aware embedded signatures and extraction. A local embedded ZIP was detected and extracted. This required local 7-Zip 26.00; other formats may need additional extractors. The deprecated PyPI `binwalk` package was not used. |
 | 7-Zip 26.00, unzip 6.00 | Python's `zipfile` can handle simple ZIPs in scripts. | Standalone extractors for tool workflows; 7-Zip was verified through Binwalk's ZIP extraction. |
+| steghide (required) | Metadata and raw-byte tools do not provide steghide-compatible embedding or extraction. | Project-local Ubuntu package recipe added; run the local smoke check after installation. |
+| stegseek (optional) | steghide handles known passphrases. | Adds wordlist and seed-based recovery for steghide media; use only case-local wordlists. Project-local Ubuntu package recipe added. |
 
 `./ctf-start tools` is read-only. Its `available` result means the executable launched
 and reported a version; it does not prove every function or sandbox permission.
@@ -43,7 +45,7 @@ should be handled within the existing role sandbox and authorized scope.
 ## 日本語
 
 Ubuntu 26.04 x86-64 の WSL では上の `./scripts/setup-native-tools.sh` で、GDB、socat、
-ExifTool、TShark、Binwalk 3、7-Zip、unzip をクローン内の `.local/tools/` に導入します。
+ExifTool、TShark、Binwalk 3、7-Zip、unzip、必須のsteghide、任意のstegseek をクローン内の `.local/tools/` に導入します。
 sudo、システム全体の apt 設定、ユーザーの PATH、パケット取得権限は変更しません。
 ハーネスの役のシェルからはクローン内のコマンドを使えます。`tools` は起動と版を
 確認するだけなので、上のオフライン試料テストも実行してください。

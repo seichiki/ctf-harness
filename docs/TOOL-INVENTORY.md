@@ -94,6 +94,10 @@ requested features. Exact artifacts and hashes are in `uv.lock`.
 | GDB 17.1, socat 1.8.1.1 | installed; breakpoint/register and local PTY relay passed | official Ubuntu packages extracted under ignored `.local/tools/` |
 | ExifTool 13.50, TShark 4.6.4 | installed; PNG metadata and offline PCAP decoding passed | official Ubuntu packages extracted locally; no live capture permission changes |
 | Binwalk 3.1.0, 7-Zip 26.00 | installed; embedded ZIP detected and extracted | official crates.io locked build and Ubuntu 7-Zip, both local |
+| steghide | required for Forensics; currently missing | Ubuntu package recipe added; not installed by this change |
+| stegseek | optional for Forensics; currently missing | Ubuntu package recipe added; not installed by this change |
+
+2026-10-31 addendum: `debugfs` 1.47.2 is available at `/usr/sbin/debugfs` from the system `e2fsprogs` package. It is now diagnosed as an optional Forensics tool.
 
 The native tools above were absent at baseline and added at the user's request.
 `./scripts/setup-native-tools.sh` repeats the clone-local Ubuntu 26.04 x86-64 setup;
@@ -110,3 +114,17 @@ may require further external extractors. See [setup and limitations](NATIVE-TOOL
 The direct `pycryptodome` distribution is **4.2.0**, confirmed both in the locked
 distribution metadata and by importing `Crypto.Cipher.AES` and `Crypto.Hash.SHA256`.
 PyPI lists 4.2.0 as a genuine release: https://pypi.org/project/pycryptodome/4.2.0/
+
+
+## Curated tools requested by a role / 役割が必要時に要求するツール
+
+The case-local `TOOL-CATALOG.md` is generated when a role starts. It includes current availability, purpose and a use condition. A role requests a tool through `request-tool.py`; the manager checks the canonical category allowlist and records the result. The following are optional, even if specialized. No package is downloaded merely by listing it. Autopsy is not in this CLI catalog.
+
+| Category | Optional requested tools |
+| --- | --- |
+| Forensics | TSK (fls/mmls/icat), Volatility 3, foremost, scalpel, xortool, qpdf, peepdf-3, Kaitai Struct, hashcat |
+| Web | sqlmap, ffuf, hashcat, flask-unsign, ysoserial, dirsearch, gobuster, XSStrike, jwt_tool, SSRFmap |
+| Crypto | xortool, hashcat |
+| Reverse/Misc | Kaitai Struct |
+
+Most Ubuntu command packages are extracted under ignored `.local/tools/ubuntu-root`; isolated Python CLIs use `uv tool`, and source-only CLIs use a clone-local venv. The install log records the resolved source revision or package output. A successful command installation does not prove that every plugin, symbol file, GPU runtime, or challenge-specific dependency is present. Failed installs are surfaced to the requesting role and the owner.

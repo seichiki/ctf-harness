@@ -15,13 +15,13 @@ declare -A selected=() packages=()
 plan_only=0
 if [[ ${1:-} == --plan ]]; then plan_only=1; shift; fi
 if (( $# == 0 )); then
-    set -- --only gdb --only socat --only exiftool --only tshark --only binwalk --only unzip
+    set -- --only gdb --only socat --only exiftool --only tshark --only binwalk --only unzip --only steghide --only stegseek
 fi
 while (( $# )); do
     if [[ "$1" != --only || $# -lt 2 ]]; then
-        echo 'Usage: setup-native-tools.sh [--only gdb|socat|exiftool|tshark|binwalk|7z|unzip] ...' >&2; exit 2
+        echo 'Usage: setup-native-tools.sh [--only gdb|socat|exiftool|tshark|binwalk|7z|unzip|steghide|stegseek] ...' >&2; exit 2
     fi
-    case "$2" in gdb|socat|exiftool|tshark|binwalk|7z|unzip) selected["$2"]=1 ;;
+    case "$2" in gdb|socat|exiftool|tshark|binwalk|7z|unzip|steghide|stegseek) selected["$2"]=1 ;;
         *) echo "Unsupported tool: $2" >&2; exit 2 ;; esac
     shift 2
 done
@@ -43,6 +43,11 @@ if [[ ${selected[binwalk]:-} ]]; then
 fi
 if [[ ${selected[7z]:-} ]]; then add_packages 7zip; fi
 if [[ ${selected[unzip]:-} ]]; then add_packages unzip; fi
+if [[ ${selected[steghide]:-} || ${selected[stegseek]:-} ]]; then
+    add_packages libjpeg8 libjpeg-turbo8 libmcrypt4 libmhash2
+fi
+if [[ ${selected[steghide]:-} ]]; then add_packages steghide; fi
+if [[ ${selected[stegseek]:-} ]]; then add_packages stegseek; fi
 if (( plan_only )); then printf '%s\n' "${!packages[@]}" | LC_ALL=C sort; exit 0; fi
 mkdir -p "$archive" "$sysroot" "$bin" "$tools/binwalk"
 for package in "${!packages[@]}"; do
@@ -56,7 +61,7 @@ for package in "${!packages[@]}"; do
     fi
     dpkg-deb -x "${matches[0]}" "$sysroot"
 done
-for tool in gdb socat exiftool tshark unzip 7z; do
+for tool in gdb socat exiftool tshark unzip 7z steghide stegseek; do
     if [[ ${selected[$tool]:-} ]]; then ln -sfn ../../../scripts/native-tool "$bin/$tool"; fi
 done
 if [[ ${selected[binwalk]:-} ]]; then
@@ -90,6 +95,8 @@ for tool in "${!selected[@]}"; do
         unzip) "$bin/$tool" -v >/dev/null ;;
         7z) "$bin/$tool" >/dev/null ;;
         binwalk) "$bin/binwalk" --version >/dev/null ;;
+        steghide) "$bin/$tool" --version >/dev/null ;;
+        stegseek) "$bin/$tool" --help >/dev/null 2>&1 ;;
     esac
 done
 echo "Selected tools installed under $tools; no system packages or global settings changed."

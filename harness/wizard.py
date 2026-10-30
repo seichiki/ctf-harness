@@ -191,10 +191,14 @@ def _summarize(case: Path, data: dict, config: dict, switches: dict) -> None:
         choice = role_choice(config, role)
         print(f"  {role}: {choice['model']} / effort: {choice['effort']} / Daybreak: {choice['daybreak']}")
     print(f"  実行方式: {config['orchestration']} / ネットワーク: {config['network_access']}")
+    if config.get("deepseek_enabled"):
+        print(f"  DeepSeek予備解析: {config['deepseek_model']}（multiのみ、テキスト資料をAPIへ送信）")
     print(f"  プロキシ: {'on' if public['proxy_active'] else 'off'} / 進行表示: {'on' if config['progress'] else 'off'}")
     print(f"  GPT writeup下書き: {'on' if config.get('writeup_draft', False) else 'off'}（正解報告後のみ）")
     if config["orchestration"] == "interactive":
         print("  対話モードでは問題文を自動送信しません。")
+    if config.get("deepseek_enabled") and config["orchestration"] != "multi":
+        raise ValueError("DeepSeek予備解析はmulti実行専用です")
     print("実行確認を終えるまでモデルは起動せず、ターゲットにも接続しません。")
 
 

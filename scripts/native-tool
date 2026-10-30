@@ -6,7 +6,7 @@ base="$tools/ubuntu-root/usr/bin"
 lib="$tools/ubuntu-root/usr/lib/x86_64-linux-gnu"
 name=$(basename -- "$0")
 case "$name" in
-    gdb|socat|tshark)
+    gdb|socat|tshark|steghide|stegseek)
         export LD_LIBRARY_PATH="$lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
         exec "$base/$name" "$@" ;;
     exiftool)

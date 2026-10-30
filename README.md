@@ -4,6 +4,21 @@
 
 A source-only, category-aware Codex CLI harness. It uses **your own ChatGPT Codex sign-in** and a model ID you choose from your account. Public defaults are Daybreak **off**, **single** session, and sandbox outbound network **off**. Daybreak Blue, external multi-session orchestration, and sandbox network access are opt-in. No API key, paid model API fallback, target submission, challenge input, or past run is included.
 
+## DeepSeek text preflight
+
+For `multi` runs, add `--deepseek` to make one optional, text-only DeepSeek API attempt before `verifier`. Store `DEEPSEEK_API_KEY=your-key` in the project root `.env` and run `chmod 600 .env`. An existing `DEEPSEEK_API_KEY` environment variable takes precedence; the key is never copied to Codex or saved in the run. The default model is `deepseek-flash`; override with `--deepseek-model` or save `deepseek_enabled = true` and `deepseek_model = "..."` in `.local/config.toml`. Only UTF-8 case files of at most 24 KB each and 72 KB total are sent. Binary and oversized files are omitted and listed in `deepseek-handoff.json`. DeepSeek has no shell, browser, or challenge target access in this stage. Its candidate, attempted reasoning, limitations, or API failure are recorded in that file and copied into the verifier role directory. The verifier runs even if the DeepSeek attempt fails, and must check its claims against the input. DeepSeek candidates never count toward the existing multi agreement rule. The call uses the external DeepSeek API independently of the Codex CLI sandbox network setting and may incur API charges. `--no-deepseek` disables a saved setting for one run.
+
+
+## Resume from a prior run
+
+Use `--handoff-from` with a prior run directory or its `HANDOFF.md` from the same case. Check the source and SHA-256 with `--dry-run`. A fresh run copies it to `PRIOR_HANDOFF.md` and to each Codex role as `prior-handoff.md`; the sealed `input/` stays unchanged. Each role treats the notes as unverified and checks them against the input. The prior handoff is not sent to the DeepSeek API when the optional preflight is enabled.
+
+```sh
+./ctf-start run --category crypto --case-id sample --orchestration multi --handoff-from categories/crypto/runs/sample/<previous-run> --dry-run
+./ctf-start run --category crypto --case-id sample --orchestration multi --handoff-from categories/crypto/runs/sample/<previous-run>
+```
+
+
 ## Quick start on Linux or Ubuntu WSL
 
 Prerequisites: Codex CLI 0.164.0 or newer with a ChatGPT sign-in, [uv](https://docs.astral.sh/uv/) and Python 3.12. Codex and uv installation are personal prerequisites; this repository does not install them or change global settings. `./ctf-start doctor` reports missing CLI, uv, lockfile, and bundled skills. Model availability and reasoning effort depend on your account and are checked by Codex on an actual run, without automatic fallback.
@@ -125,7 +140,7 @@ To later make this the owner's `~/ctf/daybreak-blue`, follow [docs/MIGRATION.md]
 
 ### Category Python environment and candidate evidence
 
-Run `uv sync --locked` after cloning or pulling dependency changes. `./ctf-start` uses `uv run --offline --locked`; generated roles use `uv run --no-cache --offline --locked --no-sync python` from their role directory. Default groups keep all declared categories available. Do not install packages during a challenge. Explicit packages: Web `httpx`, `beautifulsoup4`, `lxml`; Crypto `pycryptodome`, `sympy`; Pwn `pwntools`; Reverse `z3-solver`, `capstone`, `pyelftools`, `pefile`; Forensics `Pillow`, `scapy`, `exifread`, `pypdf`; OSINT `dnspython`; Misc `regex`. Exact versions and transitive dependencies are pinned in `uv.lock`. Native tools are separate from Python imports.
+Run `uv sync --locked` after cloning or pulling dependency changes. `./ctf-start` uses `uv run --offline --locked`; generated roles use `uv run --no-cache --offline --locked --no-sync python` from their role directory. Default groups keep all declared categories available. Roles may request curated case tools through the harness manager during a challenge; do not run package managers directly from a role. Explicit packages: Web `httpx`, `beautifulsoup4`, `lxml`; Crypto `pycryptodome`, `sympy`; Pwn `pwntools`; Reverse `z3-solver`, `capstone`, `pyelftools`, `pefile`; Forensics `Pillow`, `scapy`, `exifread`, `pypdf`; OSINT `dnspython`; Misc `regex`. Exact versions and transitive dependencies are pinned in `uv.lock`. Native tools are separate from Python imports.
 
 Every run writes `candidates.json` and `CANDIDATES.md`, including disagreement and partial failures. Exact candidate strings retain their role, reported basis, report path and artifact paths. `memory_hypothesis` identifies a role report that describes a recalled or guessed answer. Every basis remains unverified by the harness; the review role sees frozen prior reports and is not independent evidence. `candidate.txt` retains the existing consensus or owner-confirmed output. `reference-assisted` requires an observed completed external search or successful shell command to a non-target URL; a challenge URL alone does not cause it. Observed tool access does not prove the report used that data. External URLs declared without observed access are labeled `external-reference-declared-unverified`.
 
@@ -139,6 +154,15 @@ For reverse cases, the harness requests the project-local `rea-static` interface
 
 `--no-proxy` is a one-run override that clears inherited HTTP(S), ALL and NO proxy variables in the Codex process and its spawned shells. It can change the Codex API's routing for that invocation; it does not alter global settings. See [the Caido investigation](docs/CAIDO-INVESTIGATION.md) for observed historical HTTP errors and the limits of the local reproduction.
 
-For native Pwn and Forensics tools on Ubuntu 26.04 x86-64 WSL, run `./scripts/setup-native-tools.sh`, then `./ctf-start tools --missing-only --json` and `uv run --offline --locked --no-sync python scripts/native_smoke.py`. This installs GDB, socat, ExifTool, TShark, Binwalk v3, 7-Zip and unzip in ignored `.local/tools/` without sudo. Role shells get the local tool directory on PATH; the parent Codex API environment is not changed. See [native-tool capabilities and limitations](docs/NATIVE-TOOLS.md).
+For ext2/ext3/ext4 disk images, the optional Forensics tool `debugfs` is checked from the system `e2fsprogs` package; it is not part of the project-local installer.
+
+For native Pwn and Forensics tools on Ubuntu 26.04 x86-64 WSL, run `./scripts/setup-native-tools.sh`, then `./ctf-start tools --missing-only --json` and `uv run --offline --locked --no-sync python scripts/native_smoke.py`. This installs GDB, socat, ExifTool, TShark, Binwalk v3, 7-Zip, unzip, required steghide and optional stegseek in ignored `.local/tools/` without sudo. Role shells get the local tool directory on PATH; the parent Codex API environment is not changed. See [native-tool capabilities and limitations](docs/NATIVE-TOOLS.md).
 
 See [the selective installer guide](docs/INSTALL-TOOLS.md) for the checkbox UI, --all/--required, plan, confirmation, and progress logs.
+
+
+### Case tools on request
+
+Each role receives `TOOL-CATALOG.md` and `tool-catalog.json` with required and optional tools, availability, purpose, and a short "use when" description. A role requests one missing tool with `python3 request-tool.py TOOL --reason 'why this case needs it'`. The owner pre-authorizes **only these curated tool requests**. The manager installs into ignored `.local/tools/` (or the existing project environment for locked Python packages), then returns success or failure to the role. Required Forensics steghide and Reverse REA/Ghidra prerequisites are installed before those roles start when missing. Package downloads are separate from challenge-target network access; they can fail when the package source is unavailable.
+
+The terminal prints `TOOL INSTALLED` or `TOOL FAILED`. Each attempt is recorded in the run's `tool-installations.jsonl`, `tool-results/`, role `run.json`, and top-level `result.json`; installer output and source information remain under `.local/install-runs/*/summary.json` and adjacent logs. Tools already available are reported as such. Installation does not submit a flag or expand the approved challenge target. Autopsy is excluded because it is a GUI application; TSK CLI is cataloged instead. The optional catalog covers TSK, Volatility 3, foremost, scalpel, xortool, qpdf, peepdf-3, Kaitai Struct, sqlmap, ffuf, hashcat, flask-unsign, ysoserial, dirsearch, gobuster, XSStrike, jwt_tool, and SSRFmap.

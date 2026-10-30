@@ -14,6 +14,23 @@ from harness import cli
 
 
 class ToolCheckTests(unittest.TestCase):
+    def test_debugfs_is_an_optional_forensics_system_tool(self):
+        specs = {name: required for name, required, _ in toolcheck.BINARIES["forensics"]}
+        self.assertFalse(specs["debugfs"])
+        self.assertEqual(toolcheck.VERSION_ARGS["debugfs"], ["-V"])
+        with patch.object(toolcheck, "TOOLS", Path("/nonexistent-local-tools")):
+            item = toolcheck._binary_item("forensics", "debugfs", False, "e2fsprogs")
+        self.assertEqual(item["category"], "forensics")
+        self.assertEqual(item["name"], "debugfs")
+        self.assertFalse(item["required"])
+
+    def test_stego_tools_have_expected_forensics_requirements(self):
+        specs = {name: required for name, required, _ in toolcheck.BINARIES["forensics"]}
+        self.assertTrue(specs["steghide"])
+        self.assertFalse(specs["stegseek"])
+        self.assertEqual(toolcheck.VERSION_ARGS["steghide"], ["--version"])
+        self.assertEqual(toolcheck.VERSION_ARGS["stegseek"], ["--help"])
+
     def test_known_categories_and_missing_filter(self):
         with patch.object(toolcheck, "_binary_item", side_effect=lambda category, name, required, guide:
                           {"category": category, "name": name, "kind": "binary", "required": required,

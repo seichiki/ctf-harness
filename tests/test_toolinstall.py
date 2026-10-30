@@ -37,13 +37,23 @@ class InstallerTests(unittest.TestCase):
         self.assertEqual(units[0]["command"], ["uv", "sync", "--locked"])
         self.assertIn("httpx", units[0]["covers"])  # indivisible default groups disclosed
 
+    def test_stego_tools_have_local_ubuntu_install_plans(self):
+        units = toolinstall.plan([group("binary", "steghide", required=True),
+                                  group("binary", "stegseek")])
+        self.assertEqual([unit["id"] for unit in units], ["steghide", "stegseek"])
+        for unit in units:
+            self.assertIn("libmcrypt4", unit["note"])
+            self.assertIn("libmhash2", unit["note"])
+            self.assertIn("libjpeg-turbo8", unit["note"])
+            self.assertEqual(unit["command"][-2:], ["--only", unit["id"]])
+
     def test_only_selected_native_and_manual_tool(self):
         units = toolinstall.plan([group("binary", "unzip"), group("binary", "curl")])
-        self.assertEqual([unit["id"] for unit in units], ["unzip", "manual:curl"])
+        self.assertEqual([unit["id"] for unit in units], ["unzip", "curl"])
         self.assertEqual(units[0]["command"][-2:], ["--only", "unzip"])
         self.assertIn("Planned apt archives: unzip", units[0]["note"])
         self.assertNotIn("gdb", units[0]["note"])
-        self.assertIsNone(units[1]["command"])
+        self.assertEqual(units[1]["command"][-1], "curl")
         hostile = toolinstall.plan([group("binary", "unzip; touch /tmp/unwanted")])
         self.assertIsNone(hostile[0]["command"])
 

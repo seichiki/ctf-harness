@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import subprocess
 import sys
+import threading
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -14,6 +16,8 @@ from pathlib import Path
 from harness.archive import archive_categories, list_archives, restore_archive
 from harness.confirm import ConfirmationCancelled, ask
 from harness.config import DAYBREAK, EFFORTS, NETWORK_ACCESS, ORCHESTRATION, ROOT, active_roles, load, public_settings, role_choice, save, validate
+from harness.deepseek_preflight import load_api_key
+from harness import ondemand
 from harness.locks import category_lock
 from harness.handoff import Handoff
 from harness.progress import render_command
@@ -22,7 +26,7 @@ from harness.runner import (
     choose_switches, common_prompt, init_case, load_case, prepare_role,
     redact_proxy_command, require_chatgpt_login, resolve_reference, run_external, scrub_api_environment,
     require_proxy_available, seal_case, utc_now,
-    require_rea_available,
+    require_rea_available, require_steghide_available, ensure_required_case_tools, resolve_prior_handoff,
 )
 
 
@@ -63,7 +67,9 @@ def run_interactive(category: str, case_id: str, config: dict, switches: dict,
 def _run_interactive(category: str, case_id: str, config: dict, switches: dict,
                      answer_file: Path | None, answer_hash: str | None) -> Path:
     case_path, case = load_case(category, case_id)
+    preflight_tool_installations = ensure_required_case_tools(category)
     require_rea_available(category)
+    require_steghide_available(category)
     codex = shutil.which("codex")
     if not codex:
         raise ValueError("Codex CLI is missing")
@@ -99,6 +105,7 @@ def _run_interactive(category: str, case_id: str, config: dict, switches: dict,
               "blue_model_selection": "unknown" if choice["daybreak"] == "blue" else "not_requested",
               "role_requests": {"interactive": choice},
               "server_daybreak_applied": "unverified", "initial_challenge_prompt": None,
+              "tool_installations": preflight_tool_installations,
               "upstream_ctf_skills_revision": SOURCE_REVISION}
     settings_file = run_root / "settings.json"
     settings_file.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
@@ -108,12 +115,24 @@ def _run_interactive(category: str, case_id: str, config: dict, switches: dict,
     else:
         print("Daybreak is explicitly Off; the selected account model is used. No challenge prompt was sent.")
     session_status = "interrupted"
+    request_stop = threading.Event()
+    request_events = []
+    def serve_tools() -> None:
+        while not request_stop.wait(0.25):
+            request_events.extend(ondemand.service_requests(role_dir, "interactive"))
+    request_watcher = threading.Thread(target=serve_tools, daemon=True)
     try:
-        result = subprocess.run(command, cwd=role_dir,
-                                env=scrub_api_environment(bool(config["proxy_url"]) or bool(config.get("proxy_override_off"))), check=False)
-        record["exit_code"] = result.returncode
-        session_status = "completed" if result.returncode == 0 else "tool_failure"
+        process = subprocess.Popen(command, cwd=role_dir,
+                                   env=scrub_api_environment(bool(config["proxy_url"]) or bool(config.get("proxy_override_off"))))
+        request_watcher.start()
+        record["exit_code"] = process.wait()
+        session_status = "completed" if process.returncode == 0 else "tool_failure"
     finally:
+        request_stop.set()
+        if request_watcher.is_alive():
+            request_watcher.join()
+        request_events.extend(ondemand.service_requests(role_dir, "interactive"))
+        record["tool_installations"].extend(request_events)
         record["ended_at"] = utc_now()
         if config["daybreak"] == "blue" and sys.stdin.isatty():
             try:
@@ -214,6 +233,9 @@ def main(argv: list[str] | None = None) -> int:
     setup.add_argument("--network-access", choices=NETWORK_ACCESS, default="off")
     setup.add_argument("--progress", action="store_true")
     setup.add_argument("--proxy", dest="proxy_url", default="")
+    setup.add_argument("--deepseek", dest="deepseek_enabled", action="store_true",
+                       help="use a text-only DeepSeek API attempt before multi verifier")
+    setup.add_argument("--deepseek-model", default="deepseek-flash")
     setup.add_argument("--writeup-draft", action="store_true",
                        help="request an evidence-based GPT draft after owner-confirmed acceptance")
     sub.add_parser("doctor", help="check local CLI/uv/source presence without model requests")
@@ -254,11 +276,17 @@ def main(argv: list[str] | None = None) -> int:
     run = sub.add_parser("run", help="start a fresh run, or inspect a dry-run plan")
     run.add_argument("--category", choices=CATEGORIES, required=True)
     run.add_argument("--case-id", required=True)
+    run.add_argument("--handoff-from", help="prior run directory or HANDOFF.md of the same case")
     run.add_argument("--model")
     run.add_argument("--effort", choices=EFFORTS)
     run.add_argument("--daybreak", choices=DAYBREAK)
     run.add_argument("--orchestration", choices=ORCHESTRATION)
     run.add_argument("--network-access", choices=NETWORK_ACCESS)
+    deepseek_group = run.add_mutually_exclusive_group()
+    deepseek_group.add_argument("--deepseek", dest="deepseek_enabled", action="store_true")
+    deepseek_group.add_argument("--no-deepseek", dest="deepseek_enabled", action="store_false")
+    run.set_defaults(deepseek_enabled=None)
+    run.add_argument("--deepseek-model")
     progress_group = run.add_mutually_exclusive_group()
     progress_group.add_argument("--progress", dest="progress", action="store_true",
                                 help="show safe live status on stderr")
@@ -288,7 +316,9 @@ def main(argv: list[str] | None = None) -> int:
                                   "daybreak": args.daybreak, "orchestration": args.orchestration,
                                   "network_access": args.network_access,
                                   "progress": args.progress, "proxy_url": args.proxy_url,
-                                  "writeup_draft": args.writeup_draft}))
+                                  "writeup_draft": args.writeup_draft,
+                                  "deepseek_enabled": args.deepseek_enabled,
+                                  "deepseek_model": args.deepseek_model}))
             print(f"Saved local choices: {path}; model availability is account-dependent and not yet verified")
         elif args.action == "doctor":
             print(json.dumps(doctor(), indent=2))
@@ -335,7 +365,10 @@ def main(argv: list[str] | None = None) -> int:
         elif args.action == "run":
             config = load({key: getattr(args, key) for key in
                            ("model", "effort", "daybreak", "orchestration", "network_access",
-                            "progress", "proxy_url", "writeup_draft")})
+                            "progress", "proxy_url", "writeup_draft",
+                            "deepseek_enabled", "deepseek_model")})
+            if config.get("deepseek_enabled", False) and config["orchestration"] != "multi":
+                raise ValueError("DeepSeek preflight requires --orchestration multi")
             # An explicit --no-proxy also clears inherited proxy variables for this invocation.
             config["proxy_override_off"] = args.proxy_url == ""
             if args.quiet:
@@ -349,9 +382,16 @@ def main(argv: list[str] | None = None) -> int:
                              active_roles(config["orchestration"], bool(config.get("writeup_draft")))}
             case_path, case = load_case(args.category, args.case_id)
             answer_file, answer_hash = resolve_reference(switches, args.answer_file, args.dry_run)
+            prior_path, prior_hash = resolve_prior_handoff(args.category, args.case_id, args.handoff_from)
             plan = {**public_settings(config), **switches, "category": args.category, "case_id": args.case_id,
                     "owner_confirmation_requested": args.owner_confirmation,
                     "role_requests": role_requests,
+                    "deepseek_preflight": {"enabled": config.get("deepseek_enabled", False),
+                                           "model": config.get("deepseek_model", "deepseek-flash"),
+                                           "input": "eligible UTF-8 case files only",
+                                           "key_present": bool(load_api_key()) if config.get("deepseek_enabled", False) else False},
+                    "prior_handoff": {"source_run": prior_path.parent.name, "sha256": prior_hash}
+                    if prior_path is not None else None,
                     "case_dir": str(case_path), "input_file_count": len(case["input_sha256"]),
                     "answer_file_supplied": answer_file is not None,
                     "web_search_config": "live" if switches["similar_search"] else "disabled",
@@ -374,7 +414,9 @@ def main(argv: list[str] | None = None) -> int:
                       f"daybreak={config['daybreak']} network={config['network_access']} "
                       f"proxy={'on' if plan['proxy_active'] else 'off'} "
                       f"progress={'on' if config['progress'] else 'off'} "
-                      f"writeup_draft={'on' if config.get('writeup_draft', False) else 'off'}", file=sys.stderr)
+                      f"writeup_draft={'on' if config.get('writeup_draft', False) else 'off'} "
+                      f"deepseek={'on' if config.get('deepseek_enabled', False) else 'off'} "
+                      f"prior_handoff={prior_path.parent.name if prior_path else 'none'}", file=sys.stderr)
                 print("Target: " + _safe_plan_value(case.get("authorized_target") or "none") +
                       " | scope: " + _safe_plan_value(case.get("scope_note") or ""), file=sys.stderr)
                 print("Role models: " + ", ".join(f"{role}={choice['model']}/{choice['effort']}/{choice['daybreak']}"
@@ -387,7 +429,8 @@ def main(argv: list[str] | None = None) -> int:
                 else:
                     run_root = run_external(args.category, args.case_id, config, switches, answer_file, answer_hash,
                                             progress=config["progress"],
-                                            **({"owner_confirmation": True} if args.owner_confirmation else {}))
+                                            **({"owner_confirmation": True} if args.owner_confirmation else {}),
+                                            **({"handoff_from": prior_path} if prior_path else {}))
                 if not args.quiet and isinstance(run_root, Path):
                     if (run_root / "OWNER_CONFIRMATION.json").is_file():
                         print(f"正解報告：{run_root / 'OWNER_CONFIRMATION.json'}", file=sys.stderr)

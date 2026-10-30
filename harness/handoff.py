@@ -75,6 +75,10 @@ class Handoff:
                       f"- `categories/{category}/cases/{case_id}/input/`: original case input (project-relative).",
                       "- `result.json`: final aggregate status when available.",
                       "- `candidate.txt`: aggregate candidate when available."])
+        if (self.run_root / "PRIOR_HANDOFF.md").is_file():
+            lines.append("- `PRIOR_HANDOFF.md`: copied notes from the selected earlier run; verify claims against case input.")
+        if (self.run_root / "deepseek-handoff.json").is_file():
+            lines.append("- `deepseek-handoff.json`: text-only DeepSeek attempt, including failures; all claims are unverified.")
         if (self.run_root / "CANDIDATES.md").is_file():
             lines.append("- `CANDIDATES.md` and `candidates.json`: all exact role proposals and report evidence pointers; none is verified by the harness.")
         if (self.run_root / "SOLUTION.md").is_file():

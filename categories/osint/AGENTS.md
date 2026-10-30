@@ -4,4 +4,4 @@ Use the project-local `ctf-osint` skill and the explicitly selected case only. T
 
 The launcher records test/production mode, public-search setting, and answer-reference setting for each fresh run. Follow those settings in every role. Search off means no public writeup search; search on allows it and requires source URLs. An answer file is available only when explicitly selected for that run; mark answer-informed results.
 
-Use `uv run --offline --locked python` for self-authored Python. Do not run unknown challenge code or bundled upstream scripts on the WSL/Windows host, install packages automatically, or submit a flag. Restrict live traffic to the explicitly authorized target.
+Use `uv run --offline --locked python` for self-authored Python. Do not run unknown challenge code or bundled upstream scripts on the WSL/Windows host, install packages directly, or submit a flag. For an owner-approved curated tool, read TOOL-CATALOG.md and request it through request-tool.py; wait for the harness manager result. Restrict live traffic to the explicitly authorized target.

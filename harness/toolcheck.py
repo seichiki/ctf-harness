@@ -14,6 +14,10 @@ import unicodedata
 from pathlib import Path
 
 from harness.config import CATEGORIES, ROOT
+try:
+    from harness import ondemand
+except ImportError:  # minimal installer bootstrap copies only core modules
+    ondemand = None
 
 TOOLS = ROOT / ".local" / "tools"
 PYTHON = {
@@ -40,9 +44,12 @@ BINARIES = {
                 ("readelf", False, "Install GNU binutils from your OS package manager."),
                 ("strings", False, "Install GNU binutils from your OS package manager.")),
     "forensics": (("file", False, "Install file from your OS package manager."),
+                  ("debugfs", False, "Install e2fsprogs for ext2/ext3/ext4 image inspection; Ubuntu commonly includes it."),
                   ("exiftool", False, "Install ExifTool from its official release or OS package manager."),
                   ("tshark", False, "Install Wireshark/TShark from its official release or OS package manager."),
                   ("binwalk", False, "Install official Binwalk v3; run ./scripts/setup-native-tools.sh on supported WSL."),
+                  ("steghide", True, "Install project-local steghide with ./ctf-start tools install --required."),
+                  ("stegseek", False, "Install project-local stegseek with ./ctf-start tools install."),
                   ("7z", False, "Install 7-Zip for Binwalk ZIP extraction."),
                   ("unzip", False, "Install unzip for archive handling.")),
     "osint": (("curl", False, "Install curl from your OS package manager."),),
@@ -53,7 +60,8 @@ VERSION_ARGS = {"uv": ["--version"], "codex": ["--version"], "curl": ["--version
                 "readelf": ["--version"], "objdump": ["--version"], "strings": ["--version"],
                 "socat": ["-V"], "file": ["--version"], "exiftool": ["-ver"],
                 "tshark": ["-v"], "binwalk": ["--version"],
-                "7z": [], "unzip": ["-v"]}
+                "steghide": ["--version"], "stegseek": ["--help"],
+                "7z": [], "unzip": ["-v"], "debugfs": ["-V"]}
 
 
 def _safe_line(value: str) -> str:
@@ -187,6 +195,9 @@ def collect(category: str | None = None, missing_only: bool = False) -> list[dic
     for current in categories:
         items.extend(_python_item(current, *spec) for spec in PYTHON[current])
         items.extend(_binary_item(current, *spec) for spec in BINARIES.get(current, ()))
+        if ondemand is not None:
+            items.extend(ondemand.inventory_item(current, name) for name, spec in ondemand.SPECS.items()
+                         if current in spec[0])
     if "reverse" in categories:
         items.extend(_local_native_items())
     problems = {"missing", "misconfigured", "incompatible"}
@@ -215,6 +226,8 @@ def _usage_categories(item: dict) -> tuple[str, ...]:
     if kind == "binary":
         uses = [current for current in CATEGORIES
                 if any(spec[0] == name for spec in BINARIES.get(current, ()))]
+    elif kind == "on_demand" and ondemand is not None:
+        return ondemand.SPECS[name][0]
     elif kind == "python":
         uses = [current for current in CATEGORIES
                 if any(spec[0] == name for spec in PYTHON[current])]

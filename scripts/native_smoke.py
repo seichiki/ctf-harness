@@ -70,6 +70,23 @@ def main() -> int:
             print("binwalk extraction paths:", [str(p.relative_to(root)) for p in extracted.rglob("*")][:20])
         assert found and found[0].read_text() == "offline fixture\n"
 
+        if (BIN / "steghide").is_file():
+            cover = root / "stego-cover.bmp"
+            Image.new("RGB", (128, 128), "blue").save(cover)
+            payload = root / "stego-payload.txt"
+            payload.write_text("offline steghide fixture\n", encoding="utf-8")
+            stego = root / "stego-output.bmp"
+            embedded = run("steghide", "embed", "-cf", str(cover), "-ef", str(payload),
+                           "-sf", str(stego), "-p", "fixture-pass", "-f", cwd=root)
+            assert embedded.returncode == 0 and stego.is_file()
+            recovered = root / "stego-recovered.txt"
+            extracted = run("steghide", "extract", "-sf", str(stego), "-xf", str(recovered),
+                            "-p", "fixture-pass", "-f", cwd=root)
+            assert extracted.returncode == 0 and recovered.read_bytes() == payload.read_bytes()
+            print("steghide: local BMP embed/extract round trip OK")
+        else:
+            print("steghide: not installed; local round-trip smoke skipped")
+
         left, right = root / "pty-left", root / "pty-right"
         bridge = subprocess.Popen([str(BIN / "socat"), f"PTY,link={left},raw,echo=0",
                                    f"PTY,link={right},raw,echo=0"],

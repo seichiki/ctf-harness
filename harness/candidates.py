@@ -147,7 +147,8 @@ def catalog(results: dict, authorized_target: str | None, run_root: Path | None 
         artifacts = {f"{role}/{name}": digest for name, digest in record.get("artifact_sha256", {}).items()}
         target_seen = target_http_observations(run_root, role, authorized_target) if run_root else []
         external_seen = bool(observed_references(run_root, [role], authorized_target)[0]) if run_root else False
-        grade = ("dependent_review" if role == "verifier_review" else
+        grade = ("prior_model_informed" if record.get("reads_deepseek_handoff") else
+                 "dependent_review" if role == "verifier_review" else
                  "memory_hypothesis" if reported == "memory_hypothesis" else
                  "target_http_observed" if target_seen else
                  "external_reference_access_observed" if external_seen else
@@ -158,7 +159,9 @@ def catalog(results: dict, authorized_target: str | None, run_root: Path | None 
                                  "artifacts": list(artifacts), "artifact_sha256": artifacts,
                                  "target_http_observations": target_seen,
                                  "external_reference_access_observed": external_seen,
-                                 "reads_frozen_reports": role == "verifier_review"})
+                                 "reads_frozen_reports": role == "verifier_review",
+                                 "reads_deepseek_handoff": bool(record.get("reads_deepseek_handoff")),
+                                 "reads_prior_handoff": bool(record.get("reads_prior_handoff"))})
     # Do not promote a proposal merely because a dependent review repeated it.
     return sorted(groups.values(), key=lambda item: item["candidate"])
 

@@ -8,6 +8,8 @@ network_access = "off" # sandbox outbound network request; set "on" only for an 
 progress = false       # safe terminal status on stderr for external runs
 proxy_url = ""         # optional HTTP proxy endpoint, for example "http://127.0.0.1:8080"
 writeup_draft = false # after owner-confirmed acceptance, ask a separate GPT run for an evidence-based draft
+deepseek_enabled = false # multi only: send eligible UTF-8 case files to DeepSeek API before verifier
+deepseek_model = "deepseek-flash" # key from project .env (chmod 600) or DEEPSEEK_API_KEY environment variable
 
 # Optional overrides; omitted fields use the shared values above.
 # Available roles: solver (single), verifier, solver_a, solver_b,

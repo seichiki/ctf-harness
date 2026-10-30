@@ -20,6 +20,7 @@ ROLES = ("solver", "verifier", "solver_a", "solver_b", "verifier_review", "write
 ROLE_FIELDS = ("model", "effort", "daybreak")
 DEFAULTS = {"model": "", "effort": "medium", "daybreak": "off", "orchestration": "single",
             "network_access": "off", "progress": False, "proxy_url": "", "writeup_draft": False,
+            "deepseek_enabled": False, "deepseek_model": "deepseek-flash",
             "role_settings": {}}
 
 
@@ -67,6 +68,12 @@ def validate(config: dict) -> dict:
         raise ValueError("progress must be true or false")
     if type(data["writeup_draft"]) is not bool:
         raise ValueError("writeup_draft must be true or false")
+    if type(data["deepseek_enabled"]) is not bool:
+        raise ValueError("deepseek_enabled must be true or false")
+    if not _valid_model(data["deepseek_model"]):
+        raise ValueError("deepseek_model must be a valid model ID")
+    if data["deepseek_enabled"] and data["orchestration"] != "multi":
+        raise ValueError("DeepSeek preflight requires multi orchestration")
     roles = data["role_settings"]
     if not isinstance(roles, dict) or set(roles) - set(ROLES):
         raise ValueError("role_settings must contain only known roles")

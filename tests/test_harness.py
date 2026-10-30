@@ -490,6 +490,12 @@ class RunnerExecutionTests(unittest.TestCase):
                        "progress": False, "proxy_url": ""}
         self.switches = runner.choose_switches("test", "auto", "auto")
 
+    def test_steghide_is_required_only_for_forensics(self):
+        runner.require_steghide_available("misc")
+        with patch.object(runner, "ROOT", self.root), patch.object(runner.shutil, "which", return_value=None):
+            with self.assertRaises(ValueError):
+                runner.require_steghide_available("forensics")
+
     def test_positive_unbounded_case_minutes_with_finite_validation(self):
         for value in (1, 15, 16, 120, 10080):
             self.assertTrue(runner.valid_minutes(value))
@@ -502,7 +508,7 @@ class RunnerExecutionTests(unittest.TestCase):
 
     def run_mocked(self, scenarios=None, candidates=None, events=None, progress=False,
                    owner_confirmation=False, owner_class=None, handoff_failure=False,
-                   solution_failure=False, reports=None):
+                   solution_failure=False, reports=None, handoff_from=None):
         scenarios = scenarios or {}
         candidates = candidates or {}
         events = events or {}
@@ -578,7 +584,8 @@ class RunnerExecutionTests(unittest.TestCase):
              (patch.object(solved_module, "_atomic_text", side_effect=write_with_optional_solution_failure)
               if solution_failure else nullcontext()):
             path = runner.run_external("misc", "fixture", self.config, self.switches, None, None,
-                                       progress=progress, owner_confirmation=owner_confirmation)
+                                       progress=progress, owner_confirmation=owner_confirmation,
+                                       handoff_from=handoff_from)
         self.capability_programs = {call.args[1] for call in capabilities.call_args_list}
         self.progress_output = output.getvalue()
         self.final_output = json.loads(final.getvalue())
@@ -606,6 +613,50 @@ class RunnerExecutionTests(unittest.TestCase):
             self.assertIn(f"sandbox_workspace_write.network_access={'true' if self.config['network_access'] == 'on' else 'false'}", command)
             self.assertTrue((path / role / "run.json").is_file())
         return path, summary, [role for role, _, _ in calls]
+
+    def test_deepseek_failure_is_handed_to_verifier_and_multi_continues(self):
+        self.config["deepseek_enabled"] = True
+        self.config["deepseek_model"] = "deepseek-flash"
+
+        def failed_attempt(input_dir, run_root, chosen, deadline):
+            record = {"status": "api_error", "model_requested": "deepseek-flash",
+                      "candidate": None, "attempts": [], "reason": "HTTP 503",
+                      "limitations": [], "http_status": 503}
+            (run_root / "deepseek-handoff.json").write_text(json.dumps(record), encoding="utf-8")
+            return record
+
+        with patch.object(runner, "deepseek_attempt", side_effect=failed_attempt) as deepseek:
+            path, summary, roles = self.run_mocked()
+        deepseek.assert_called_once()
+        self.assertEqual(roles[0], "verifier")
+        self.assertEqual(summary["status"], "candidate_pending")
+        self.assertEqual(summary["deepseek_preflight"]["http_status"], 503)
+        self.assertTrue((path / "verifier" / "deepseek-handoff.json").is_file())
+        self.assertIn("Read deepseek-handoff.json", (path / "verifier" / "prompt.txt").read_text())
+        verifier_source = summary["candidates"][0]["sources"][0]
+        self.assertTrue(verifier_source["reads_deepseek_handoff"])
+
+    def test_prior_handoff_is_copied_to_every_role_without_changing_input(self):
+        previous = self.root / "categories" / "misc" / "runs" / "fixture" / "old-run"
+        previous.mkdir(parents=True)
+        (previous / "HANDOFF.md").write_text("# Earlier attempt\nNo candidate before timeout.\n", encoding="utf-8")
+        original_hashes = runner.load_case("misc", "fixture")[1]["input_sha256"]
+        path, summary, roles = self.run_mocked(handoff_from=previous)
+        self.assertEqual(len(roles), 4)
+        self.assertEqual(summary["prior_handoff"]["source_run"], "old-run")
+        self.assertEqual((path / "PRIOR_HANDOFF.md").read_text(encoding="utf-8"),
+                         (previous / "HANDOFF.md").read_text(encoding="utf-8"))
+        for role in roles:
+            self.assertTrue((path / role / "prior-handoff.md").is_file())
+            self.assertIn("Read prior-handoff.md", (path / role / "prompt.txt").read_text())
+        self.assertEqual(runner.load_case("misc", "fixture")[1]["input_sha256"], original_hashes)
+
+    def test_prior_handoff_rejects_a_different_case(self):
+        other = self.root / "categories" / "misc" / "runs" / "other" / "old-run"
+        other.mkdir(parents=True)
+        (other / "HANDOFF.md").write_text("# Wrong case\n", encoding="utf-8")
+        with self.assertRaises(ValueError):
+            runner.resolve_prior_handoff("misc", "fixture", other)
 
     def test_successful_multi_roles_and_candidate(self):
         path, summary, roles = self.run_mocked()
@@ -931,6 +982,22 @@ class RunnerExecutionTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "proxy is unavailable"):
                 runner.run_external("misc", "fixture", self.config, self.switches, None, None)
         popen.assert_not_called()
+
+    def test_cli_deepseek_dry_run_is_explicit_and_key_free(self):
+        with tempfile.TemporaryDirectory() as folder:
+            settings = Path(folder) / "config.toml"
+            settings.write_text('model = "gpt-5.6-sol"\norchestration = "multi"\n', encoding="utf-8")
+            output = io.StringIO()
+            with patch.object(cli, "load", side_effect=lambda overrides: config.load(overrides, settings)), \
+                 patch.dict(os.environ, {"DEEPSEEK_API_KEY": ""}), \
+                 patch("harness.deepseek_preflight.DOTENV_FILE", Path(folder) / ".env"), redirect_stdout(output):
+                self.assertEqual(cli.main(["run", "--category", "misc", "--case-id", "fixture",
+                                           "--deepseek", "--deepseek-model", "deepseek-v4-pro",
+                                           "--dry-run"]), 0)
+            plan = json.loads(output.getvalue())
+            self.assertTrue(plan["deepseek_preflight"]["enabled"])
+            self.assertEqual(plan["deepseek_preflight"]["model"], "deepseek-v4-pro")
+            self.assertFalse(plan["deepseek_preflight"]["key_present"])
 
     def test_cli_saved_settings_can_be_overridden_off_without_editing_file(self):
         endpoint = "http://127.0.0.1:8080"

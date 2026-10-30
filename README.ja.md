@@ -4,6 +4,19 @@
 
 カテゴリ別に使える、ソースコードだけで構成した Codex CLI 用ハーネスです。**自分の ChatGPT アカウントで Codex にサインイン**し、そのアカウントで利用できるモデル ID を指定します。公開版の初期設定は Daybreak **オフ**、**単体**セッション、サンドボックスの外向き通信 **オフ** です。Daybreak Blue、複数セッション、外向き通信は明示的に選んだ場合だけ有効になります。API キー、有料モデル API への自動切替、フラグの自動提出、問題データ、過去の実行記録は含みません。
 
+## DeepSeekによる事前解析
+
+`multi` 実行に `--deepseek` を付けると、`verifier` の前にDeepSeek APIでテキスト資料だけを1回解析します。プロジェクト直下の `.env` に `DEEPSEEK_API_KEY=あなたのキー` と記入し、`chmod 600 .env` で読取権限を制限してください。環境変数 `DEEPSEEK_API_KEY` も使え、両方あれば環境変数を優先します。キーをCodex子プロセスや実行記録には渡しません。初期モデルは `deepseek-flash` で、`--deepseek-model` または `.local/config.toml` の `deepseek_enabled = true` と `deepseek_model = "..."` で変更できます。1ファイル24 KB、合計72 KB以内のUTF-8ファイルだけをAPIへ送り、省略したファイルは `deepseek-handoff.json` に記録します。DeepSeekにはシェル、ブラウザー、問題接続先を使わせません。候補・試み・理由・制約、またはAPI失敗を同ファイルに保存し、verifierの作業フォルダーへ渡します。失敗してもverifierは実行し、内容を問題データと照合します。DeepSeek候補は現行multiの合意判定には数えません。このAPI通信はCodex CLIのネットワーク設定と独立しており、契約に応じた料金が発生する場合があります。保存設定を一回だけ切るには `--no-deepseek` を使います。
+
+## 前回の実行から再開する
+
+時間切れなどで再実行するときは、同じケースの前回実行フォルダーを `--handoff-from` に指定します。`HANDOFF.md` のファイルパスも指定できます。まず `--dry-run` でコピー元とハッシュを確認し、実行すると新しい実行フォルダーの `PRIOR_HANDOFF.md` と各Codex役割の `prior-handoff.md` にコピーします。元の `input/` は変更しません。各役割は前回の記録を未検証の参考情報として読み、問題入力と照合します。DeepSeek予備解析をオンにしていても、前回のHANDOFFはDeepSeek APIには送りません。
+
+```sh
+./ctf-start run --category crypto --case-id sample --orchestration multi --handoff-from categories/crypto/runs/sample/<前回の実行フォルダー> --dry-run
+./ctf-start run --category crypto --case-id sample --orchestration multi --handoff-from categories/crypto/runs/sample/<前回の実行フォルダー>
+```
+
 ## Linux または Ubuntu WSL で始める
 
 必要なものは、ChatGPT アカウントでサインインした Codex CLI 0.164.0 以降、[uv](https://docs.astral.sh/uv/)、Python 3.12 です。Codex と uv は各自で用意してください。このリポジトリはそれらをインストールせず、グローバル設定も変更しません。`./ctf-start doctor` で CLI、uv、ロックファイル、同梱スキルの不足を確認できます。モデルと推論の強度を使えるかどうかは各アカウントによって異なり、実行時に Codex が判定します。利用できなくても別のモデルへ自動的に切り替えません。
@@ -125,7 +138,7 @@ Git の対象外のファイルを `-f` で強制追加しないでください�
 
 ### カテゴリ別 Python 環境と候補の根拠
 
-クローン後または依存更新後に `uv sync --locked` を実行します。`./ctf-start` は `uv run --offline --locked`、各役割は作業フォルダから `uv run --no-cache --offline --locked --no-sync python` を使います。全カテゴリの依存グループが既定で有効なので、通常の同期で別カテゴリのパッケージが消えません。問題実行中にパッケージを追加しないでください。明示的に追加したものは Web: `httpx`, `beautifulsoup4`, `lxml`、Crypto: `pycryptodome`, `sympy`、Pwn: `pwntools`、Reverse: `z3-solver`, `capstone`, `pyelftools`, `pefile`、Forensics: `Pillow`, `scapy`, `exifread`, `pypdf`、OSINT: `dnspython`、Misc: `regex` です。正確なバージョンと間接依存は `uv.lock` に固定しています。Ghidra や GDB などの外部ツールは Python import とは別に確認します。
+クローン後または依存更新後に `uv sync --locked` を実行します。`./ctf-start` は `uv run --offline --locked`、各役割は作業フォルダから `uv run --no-cache --offline --locked --no-sync python` を使います。全カテゴリの依存グループが既定で有効なので、通常の同期で別カテゴリのパッケージが消えません。問題実行中にパッケージを追加しないでください。明示的に追加したものは Web: `httpx`, `beautifulsoup4`, `lxml`、Crypto: `pycryptodome`, `sympy`、Pwn: `pwntools`、Reverse: `z3-solver`, `capstone`, `pyelftools`, `pefile`、Forensics: `Pillow`, `scapy`, `exifread`, `pypdf`、OSINT: `dnspython`、Misc: `regex` です。正確なバージョンと間接依存は `uv.lock` に固定しています。Ghidra や GDB などの外部ツールは Python import とは別に確認します。Forensics のext2/3/4イメージ調査用 `debugfs` は任意ツールとして診断し、Ubuntuでは `e2fsprogs` が提供します。
 
 各実行は不一致や一部失敗でも `candidates.json` と `CANDIDATES.md` に全役割の候補を保存します。文字列が異なる候補は統合せず、役割、報告された根拠の種類、レポートと成果物のパスを残します。`memory_hypothesis` は役割レポートが記憶や推測による候補と述べたものです。その他の分類もハーネスによる正答検証ではありません。レビュー役は先行レポートを読むため独立証拠ではありません。従来の合意または利用者確認済み出力は `candidate.txt` に維持します。`reference-assisted` は対象外 URL への成功したシェルコマンドか完了した外部検索を観測した場合に限ります。問題サーバーの URL だけではこの分類にしません。宣言された外部 URL でもアクセスを観測できない場合は `external-reference-declared-unverified` です。
 
@@ -138,7 +151,7 @@ Reverse の問題では、プロジェクト内の `rea-static` を REA/Ghidra �
 このホストでは実際の Codex 子プロセスを network OFF で動かした際、Ghidra のローカル Unix ソケットが拒否されました。このプロファイルでの REA 連携は未達です。詳細は [REA/Ghidra の手順](docs/REA-GHIDRA.md) を参照してください。
 
 所有者が許可した1回限りの network ON 検証では、実際の Codex 子プロセスから自作 ELF の REA/Ghidra 逆コンパイルが成功しました。network OFF ではローカル Unix ソケットが拒否されたままです。network ON は外部ホストへの通信も可能にするため、この結果を他の設定や実問題の保証と解釈しないでください。
-Ubuntu 26.04 x86-64 WSL の Pwn・Forensics 用外部ツールは `./scripts/setup-native-tools.sh` でクローン内に導入できます。`./ctf-start tools --missing-only --json` で版を確認し、`uv run --offline --locked --no-sync python scripts/native_smoke.py` でローカル試料を確認します。対象は GDB、socat、ExifTool、TShark、Binwalk 3、7-Zip、unzip です。sudo やグローバル PATH の変更はありません。[機能と制限](docs/NATIVE-TOOLS.md) を参照してください。
+Ubuntu 26.04 x86-64 WSL の Pwn・Forensics 用外部ツールは `./scripts/setup-native-tools.sh` でクローン内に導入できます。`./ctf-start tools --missing-only --json` で版を確認し、`uv run --offline --locked --no-sync python scripts/native_smoke.py` でローカル試料を確認します。対象は GDB、socat、ExifTool、TShark、Binwalk 3、7-Zip、unzip、必須のsteghide、任意のstegseek です。sudo やグローバル PATH の変更はありません。[機能と制限](docs/NATIVE-TOOLS.md) を参照してください。
 
 `./ctf-start tools` は現在の導入・版・プロバイダー診断だけを表示します。保存済みの REA/Codex 過去テストは通常表示・`--missing-only`・JSON のどれにも出しません。`available` は将来の子サンドボックス動作まで保証しません。
 
@@ -147,3 +160,10 @@ Ubuntu 26.04 x86-64 WSL の Pwn・Forensics 用外部ツールは `./scripts/set
 `tools` の人向け表示には日本語を含めません。先頭に `Required / Optional` を表示し、対話端末で色が使える場合は `Required` のみ緑です。見出しは `TOOL`、`VERSION`、`CATEGORIES`、`STATUS` です。必須ツールの行は緑、利用可の `✓` は緑、利用不可の必須ツールの `✕` は赤、利用不可の任意ツールは無色の `-` です。`NO_COLOR`、`TERM=dumb`、リダイレクト、JSON には ANSI 色を入れません。正確な状態や必須・任意の値は `--json` を参照してください。
 
 選択式の導入画面、一括導入、計画の確認、進捗ログについては[ツール導入ガイド](docs/INSTALL-TOOLS.ja.md)を参照してください。
+
+
+### 問題中に必要になったツール
+
+各役割の作業ディレクトリに、必須・任意ツールの状態、用途、使う場面をまとめた `TOOL-CATALOG.md` と `tool-catalog.json` を置きます。役割は `python3 request-tool.py ツール名 --reason 'この問題で必要な理由'` で要求できます。所有者の事前承認は、この一覧にあるツールを選択済みの問題で要求する場合に限ります。管理側がクローン内の `.local/tools/` に導入し、成功・失敗を役割へ返します。Forensics の steghide と Reverse の REA/Ghidra は不足時に役割開始前に導入します。ツール取得の通信は問題の接続先とは別です。取得元に接続できない場合は失敗として記録します。
+
+導入結果はターミナルの `TOOL INSTALLED`／`TOOL FAILED` に表示され、実行ディレクトリの `tool-installations.jsonl`、`tool-results/`、各役割の `run.json`、全体の `result.json` に残ります。取得元と詳細ログは `.local/install-runs/*/summary.json` と隣接ログで確認できます。既に使えるツールは再導入しません。Autopsy は GUI のため対象外にし、TSK の CLI を任意候補に入れています。
